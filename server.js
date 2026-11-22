@@ -252,7 +252,10 @@ function adminDelete(req, res, p) {
 
 // ---------------------------------------------------------------- serveur HTTP
 const PAGES = { '/chat': 'chat.html', '/admin': 'admin.html' };
-const CSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'";
+// CHAT_FRAME_ANCESTORS : sites autorisés à intégrer /chat dans une iframe (ex. ton site Wix). /admin n'est jamais intégrable.
+const FRAME_OK = (process.env.CHAT_FRAME_ANCESTORS || '').split(/\s+/).filter(o => /^https:\/\/(\*\.)?[a-z0-9.-]+(:\d+)?$/i.test(o)).join(' ');
+const cspFor = fa => "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors " + fa + "; base-uri 'none'";
+const CSP = cspFor("'none'"), CSP_CHAT = cspFor(FRAME_OK || "'none'");
 
 http.createServer(async (req, res) => {
   try {
@@ -260,7 +263,7 @@ http.createServer(async (req, res) => {
     if (req.method === 'GET' && (p === '/' || PAGES[p])) {
       if (p === '/') { res.writeHead(302, { Location: '/chat' }); return res.end(); }
       const html = fs.readFileSync(path.join(__dirname, 'public', PAGES[p]));
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': CSP, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': p === '/chat' ? CSP_CHAT : CSP, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' });
       return res.end(html);
     }
     if (req.method === 'GET' && /^\/uploads\/[0-9a-f]{32}\.(png|jpg|gif|webp)$/.test(p)) {

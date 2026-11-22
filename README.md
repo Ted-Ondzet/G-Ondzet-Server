@@ -3,7 +3,7 @@
 Aucune dépendance : Node 18+ suffit.
 
 ```bash
-ADMIN_KEY="obitouchiwa7z." node server.js      # http://localhost:3000
+ADMIN_KEY="une-longue-phrase-secrete" node server.js      # http://localhost:3000
 ```
 
 | Variable      | Rôle                                                                 |
@@ -12,6 +12,7 @@ ADMIN_KEY="obitouchiwa7z." node server.js      # http://localhost:3000
 | `PORT`        | 3000 par défaut                                                      |
 | `DATA_DIR`    | dossier des données (`./data`) : **à sauvegarder / garder sur disque persistant** |
 | `TRUST_PROXY` | `1` derrière un proxy HTTPS (Render, Railway, nginx…) pour lire la vraie IP |
+| `CHAT_FRAME_ANCESTORS` | adresses https autorisées à intégrer `/chat` dans une iframe, séparées par des espaces (ex. `https://monsite.wixsite.com https://www.mondomaine.fr`). `/admin` n'est jamais intégrable. |
 
 ## Pages
 - `/chat` : discussion du site (inscription, connexion, mot de passe oublié, messages, images)
@@ -37,4 +38,3 @@ node test.js
 ## Sécurité (déjà en place)
 Mots de passe et réponses secrètes hachés (scrypt) · limitation des essais de connexion / récupération ·
 images vérifiées (PNG/JPEG/GIF/WebP, 3 Mo max, pas de SVG) · pages protégées par une CSP · clé admin comparée en temps constant.
-"# G-Ondzet-Server" 
