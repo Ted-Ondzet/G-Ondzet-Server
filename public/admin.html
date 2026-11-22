@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>G-Ondzet · Administration</title>
+<style>
+:root{--bg:#0b0f08;--row:#151c10;--acc:#76b900;--txt:#fff;--sub:#9aa394}
+@media (prefers-color-scheme:light){:root{--bg:#f3f5f0;--row:#fff;--txt:#10150c;--sub:#5d6656}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.4 system-ui,sans-serif;padding:16px;max-width:900px;margin:auto}
+h1{font-size:20px}h1 span{color:var(--acc)}h2{font-size:16px;margin:22px 0 8px;color:var(--acc)}
+input,select,textarea{font:inherit;width:100%;padding:10px 12px;margin:4px 0;border-radius:10px;border:1px solid #76b90055;background:var(--row);color:var(--txt)}
+button{font:inherit;cursor:pointer;border:0;border-radius:18px;padding:8px 16px;font-weight:700;background:var(--acc);color:#000}
+button.s{padding:4px 10px;font-size:12px;background:#ff5555;color:#fff}button.g{background:transparent;color:var(--txt);border:1px solid #76b90088}
+.row{display:flex;gap:8px}.row>*{flex:1}.item{background:var(--row);border-radius:12px;padding:10px 12px;margin:6px 0;display:flex;gap:10px;align-items:center}
+.item div{flex:1;min-width:0;word-break:break-word}.sub{color:var(--sub);font-size:12px}#msg{font-weight:700;min-height:1.4em}.ok{color:var(--acc)}.bad{color:#ff6b6b}
+.item img{height:40px;border-radius:6px}code{background:#76b90022;padding:1px 6px;border-radius:6px}
+</style></head><body>
+<h1>G-Ondzet <span>· Administration</span></h1>
+<div id="login"><input id="key" type="password" placeholder="Clé administrateur"><button id="go">Entrer</button></div>
+<div id="app" style="display:none">
+<div id="msg"></div>
+<h2>Envoyer une notification</h2>
+<select id="kind"><option value="promo">📣 Message promo</option><option value="code">🎁 Code de jeu</option></select>
+<input id="title" placeholder="Titre (80 max)" maxlength="80">
+<textarea id="body" rows="3" placeholder="Message (600 max)" maxlength="600"></textarea>
+<input id="code" placeholder="Code du jeu (ex. XXXXX-XXXXX-XXXXX)" style="display:none">
+<div class="row">
+<input id="to" placeholder="Pseudo précis (vide = tout le monde)">
+<select id="theme"><option value="">Tous les thèmes</option><option value="0">Thème NVIDIA</option><option value="1">Thème PlayStation 5</option><option value="2">Thème Xbox</option><option value="3">Thème Steam</option><option value="4">Thème PlayStation 4</option><option value="5">Thème Switch 2</option></select></div>
+<button id="send" style="margin-top:6px">Envoyer</button>
+<div class="sub">Un code envoyé à « tout le monde » sera visible par tous les comptes : pour un code unique, indique un pseudo.</div>
+<h2>Notifications envoyées</h2><div id="notifs"></div>
+<h2>Comptes</h2><div id="users"></div>
+<h2>Derniers messages du chat</h2><div id="msgs"></div>
+</div>
+<script>
+const $=id=>document.getElementById(id);let key=sessionStorage.gkey||'';
+const say=(t,ok)=>{$('msg').textContent=t;$('msg').className=ok?'ok':'bad'};
+async function api(m,p,b){const r=await fetch(p,{method:m,headers:{'Content-Type':'application/json','x-admin-key':key},body:b?JSON.stringify(b):undefined});
+  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Erreur');return j}
+$('kind').onchange=()=>$('code').style.display=$('kind').value==='code'?'block':'none';
+$('go').onclick=()=>{key=$('key').value;load()};
+const T=['NVIDIA','PS5','Xbox','Steam','PS4','Switch 2'];
+const el=(tag,txt,cls)=>{const e=document.createElement(tag);if(txt!=null)e.textContent=txt;if(cls)e.className=cls;return e};
+function item(main,sub,btn,img){const d=el('div'),w=el('div');w.append(el('div',main));if(sub)w.append(el('div',sub,'sub'));
+  if(img){const i=el('img');i.src=img;d.append(i)}d.append(w);if(btn)d.append(btn);d.className='item';return d}
+async function load(){
+  try{const j=await api('GET','/v1/admin/overview');sessionStorage.gkey=key;$('login').style.display='none';$('app').style.display='block';
+    const N=$('notifs');N.textContent='';j.notifications.forEach(n=>{const b=el('button','Supprimer','s');b.onclick=()=>del('/v1/admin/notifications/'+n.id);
+      N.append(item((n.kind==='code'?'🎁 ':'📣 ')+n.title+(n.code?'  →  '+n.code:''),new Date(n.ts).toLocaleString()+' · '+(n.to?'pour '+n.to:'tous')+' · '+(n.theme==null?'tous thèmes':'thème '+T[n.theme]),b))});
+    const U=$('users');U.textContent='';j.users.forEach(u=>{const b=el('button',u.banned?'Réactiver':'Suspendre',u.banned?'g':'s');
+      b.onclick=()=>api('POST','/v1/admin/ban',{username:u.username,banned:!u.banned}).then(load).catch(e=>say(e.message));
+      U.append(item(u.username+(u.banned?'  (suspendu)':''),'créé le '+new Date(u.created).toLocaleDateString(),b))});
+    const M=$('msgs');M.textContent='';j.messages.forEach(m=>{const b=el('button','Supprimer','s');b.onclick=()=>del('/v1/admin/messages/'+m.id);
+      M.append(item(m.user+' : '+(m.text||'(image)'),new Date(m.ts).toLocaleString(),b,m.image?'/uploads/'+m.image:null))});
+  }catch(e){delete sessionStorage.gkey;$('login').style.display='block';$('app').style.display='none';if(key)alert(e.message)}}
+const del=p=>api('DELETE',p).then(load).catch(e=>say(e.message));
+$('send').onclick=()=>api('POST','/v1/admin/notify',{kind:$('kind').value,title:$('title').value,body:$('body').value,code:$('code').value,to:$('to').value,theme:$('theme').value})
+  .then(()=>{say('Notification envoyée ✓',true);['title','body','code','to'].forEach(i=>$(i).value='');load()}).catch(e=>say(e.message));
+if(key)load();
+</script></body></html>
