@@ -12,18 +12,10 @@ ADMIN_KEY="une-longue-phrase-secrete" node server.js      # http://localhost:300
 | `PORT`        | 3000 par défaut                                                      |
 | `DATA_DIR`    | dossier des données (`./data`) : **à sauvegarder / garder sur disque persistant** |
 | `TRUST_PROXY` | `1` derrière un proxy HTTPS (Render, Railway, nginx…) pour lire la vraie IP |
-| `CHAT_FRAME_ANCESTORS` | adresses https autorisées à intégrer `/chat` dans une iframe, séparées par des espaces (ex. `https://monsite.wixsite.com https://www.mondomaine.fr`). `/admin` n'est jamais intégrable. |
 
 ## Pages
 - `/chat` : discussion du site (inscription, connexion, mot de passe oublié, messages, images)
 - `/admin` : envoi de promos / codes, comptes (suspendre), modération du chat
-
-## Mettre en ligne (exemple Render ou Railway)
-1. Mets le contenu de ce dossier dans un dépôt GitHub (`server.js`, `package.json` et `public/` à la racine du dépôt).
-2. Crée un « Web Service » Node relié au dépôt. Commande de démarrage : `npm start`.
-3. Variables d'environnement : `ADMIN_KEY` = ta clé secrète, `TRUST_PROXY` = `1`, `DATA_DIR` = `/data`.
-4. Ajoute un **disque persistant** monté sur `/data`. Sans lui, les comptes et messages sont effacés à chaque redémarrage.
-5. Ouvre `https://TON-ADRESSE/chat` pour vérifier, puis copie cette adresse dans `Net.java`.
 
 ## Brancher l'appli
 Dans `app/src/main/java/com/ondzet/game/Net.java`, mets l'adresse **https** du serveur :
@@ -39,35 +31,27 @@ node test.js
 Mots de passe et réponses secrètes hachés (scrypt) · limitation des essais de connexion / récupération ·
 images vérifiées (PNG/JPEG/GIF/WebP, 3 Mo max, pas de SVG) · pages protégées par une CSP · clé admin comparée en temps constant.
 
-## Garder les données gratuitement (hébergeur sans disque)
-Sur Render gratuit, les fichiers sont effacés à chaque redémarrage. Le serveur sait donc aussi enregistrer comptes, sessions, messages, notifications et images chez **Upstash Redis** (offre gratuite) et les restaurer au démarrage.
-1. Crée un compte sur upstash.com, puis **Create Database** (type Redis, région proche de ton serveur Render, offre Free).
-2. Dans l'onglet **REST API** de la base, copie `UPSTASH_REDIS_REST_URL` et `UPSTASH_REDIS_REST_TOKEN`.
-3. Sur Render, **Environment** : ajoute ces deux variables telles quelles, puis enregistre (redéploiement automatique).
-4. Au démarrage, les logs affichent « Sauvegarde distante active ». Sans ces variables, le serveur reste en stockage local seulement.
+## Mise en ligne (obligatoire : l'appli exige https)
+1. Héberge le dossier `server/` sur un service Node (Render, Railway, Fly.io, VPS…) : commande de démarrage `npm start`.
+2. Variables : `ADMIN_KEY` (longue phrase secrète), `TRUST_PROXY=1`, et `DATA_DIR` pointant vers un **disque persistant** (sinon comptes et messages sont perdus à chaque redéploiement).
+3. Ouvre `https://ton-adresse/chat` pour vérifier, puis `https://ton-adresse/admin` (clé admin) pour envoyer une promo.
+4. Mets l'adresse dans `Net.API` (`app/src/main/java/com/ondzet/game/Net.java`), sans « / » final, puis recompile l'appli.
 
-Limites de l'offre gratuite : une requête fait environ 1 Mo au maximum, donc les images sont limitées à 700 Ko (le chat les réduit déjà avant l'envoi) et les plus anciens messages sont retirés si la discussion devient trop volumineuse. Si Upstash est injoignable au démarrage, le serveur s'arrête et réessaie plutôt que de repartir à vide et d'écraser les données en ligne.
+## Données durables (indispensable sur Render gratuit)
+Sur l'offre gratuite de Render le disque est **effacé à chaque redémarrage** : comptes, amis, messages, images et vocaux disparaissent. Deux solutions :
+1. **Disque persistant** Render (offre payante) : `DATA_DIR` = chemin du disque.
+2. **Sauvegarde GitHub gratuite (intégrée)** :
+   - crée un dépôt **privé** (ex. `gondzet-data`) avec au moins un fichier (README) ;
+   - crée un jeton *fine-grained* limité à ce dépôt : **Contents → Read and write** ;
+   - sur Render → *Environment* : `GH_TOKEN` = le jeton, `GH_REPO` = `ton-pseudo/gondzet-data` (option : `GH_BRANCH`, `GH_DIR`) ;
+   - redéploie : les logs affichent « Sauvegarde GitHub : N fichier(s) restauré(s) ». Les fichiers sont copiés toutes les 20 s et restaurés au démarrage.
 
-## Amis, discussions privées, comptes Steam (API)
-Toutes ces routes demandent `Authorization: Bearer <jeton>` (le même que pour le chat).
+## Nouveautés v5.24
+`GET /v1/users?q=` (recherche de joueurs, 2 lettres min.) · messages vocaux (`audio` data-URL m4a/webm/ogg, `dur` en ms, 1,5 Mo / 60 s max) dans `/v1/chat`, `/v1/dm`, `/v1/group` · fichiers servis avec `Range`.
+Tests : `node test_v524.js`, `node test_durable.js` (avec un faux GitHub), `node test_social.js`.
 
-| Route | Rôle |
-|---|---|
-| `GET /v1/users/search?q=` | cherche un joueur (2 à 20 caractères) ; renvoie `status` : `none`, `outgoing`, `incoming`, `friend` |
-| `GET /v1/friends` | `friends` (avec `online`), `incoming` (demandes reçues), `outgoing` (demandes envoyées) |
-| `POST /v1/friends/request` `{username}` | envoie une demande (si l'autre t'avait déjà invité, vous devenez amis) |
-| `POST /v1/friends/accept` `{username}` | accepte une demande reçue |
-| `POST /v1/friends/decline` `{username}` | refuse une demande reçue ou annule une demande envoyée |
-| `POST /v1/friends/remove` `{username}` | retire un ami |
-| `GET /v1/dm` | conversations avec dernier message et `unread` (total dans `unread`) |
-| `GET /v1/dm/thread?with=&after=` | messages d'une conversation (ouvrir la conversation la marque comme lue) |
-| `POST /v1/dm/send` `{to, text, image?}` | message privé, **entre amis uniquement** (texte 1000 caractères, image comme dans le chat) |
-| `POST /v1/dm/delete` `{id}` | supprime un de ses messages privés |
-| `GET /v1/steam` | mes comptes Steam + indique si un coffre existe |
-| `POST /v1/steam` `{accounts:[{id?, label, steamId, shared}]}` | remplace la liste (5 max). `steamId` : SteamID64, nom de profil ou lien steamcommunity.com |
-| `GET /v1/steam/friend?username=` | comptes que cet **ami** a choisi de partager (`shared: true`) |
-| `GET /v1/vault` · `POST /v1/vault` `{blob}` · `POST /v1/vault/delete` | coffre privé (128 Ko max) |
-
-**Coffre :** l'appli doit envoyer le coffre **déjà chiffré** (le serveur ne le déchiffre jamais et l'administrateur ne peut pas le lire). Ne mets jamais de mot de passe Steam en clair dans `/v1/steam`.
-Les discussions privées ne sont visibles ni dans `/admin` ni par les autres joueurs. Tout est sauvegardé chez Upstash si les variables sont définies (le coffre champ par champ).
-Tests : `node test-social.js` (serveur lancé avec `ADMIN_KEY=secret123`), `node test-remote.js` (sauvegarde distante).
+## v5.25 : sauvegarde Upstash (gratuite), iframe Wix, comptes Steam
+- **Upstash** (alternative à GitHub, une seule à la fois) : crée une base Redis gratuite sur upstash.com, puis sur Render ajoute `UPSTASH_REDIS_REST_URL` et `UPSTASH_REDIS_REST_TOKEN` (onglet *REST API* de la base). Les logs affichent « Sauvegarde Upstash active ». Si `GH_TOKEN` et `GH_REPO` sont aussi définies, GitHub reste prioritaire.
+- **`CHAT_FRAME_ANCESTORS`** : adresses https autorisées à afficher `/chat` dans une iframe (ex. `https://monsite.wix-site-host.com`, un « / » final est toléré). `/admin` n'est jamais intégrable.
+- **Comptes Steam** (jeton `Authorization: Bearer`) : `GET /v1/steam`, `POST /v1/steam` `{accounts:[{id?, label, steamId, shared}]}` (5 max), `GET /v1/steam/friend?username=` (comptes partagés d'un ami), `GET /v1/vault`, `POST /v1/vault` `{blob}` (128 Ko max, déjà chiffré par l'appli), `POST /v1/vault/delete`. Ne mets jamais de mot de passe Steam en clair.
+- Tests : `node test_upstash.js`.

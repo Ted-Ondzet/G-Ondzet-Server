@@ -15,18 +15,22 @@ fs.mkdirSync(UP, { recursive: true });
 
 // ---------------------------------------------------------------- stockage (fichiers JSON, écriture atomique)
 function load(name, def) { try { return JSON.parse(fs.readFileSync(path.join(DATA, name), 'utf8')); } catch (e) { return def; } }
-const db = {
+const db = {};   // v5.24 : rempli par initDb() apres la restauration de la sauvegarde durable (voir plus bas)
+function initDb() {
+  Object.assign(db, {
   users: load('users.json', {}),          // clé = pseudo en minuscules
   sessions: load('sessions.json', {}),    // clé = sha256(token)
   messages: load('messages.json', []),
   notifs: load('notifs.json', []),
-  seq: load('seq.json', { msg: 0, notif: 0, dm: 0 }),
-  friends: load('friends.json', {}),      // clé = pseudo minuscule -> { f: amis, in: demandes reçues, out: demandes envoyées }
-  dms: load('dms.json', []),              // discussions privées
-  dmreads: load('dmreads.json', {}),      // clé = pseudo -> { autre pseudo: dernier id lu }
-  steam: load('steam.json', {}),          // clé = pseudo -> [{ id, label, steamId, shared }]
-  vaults: load('vaults.json', {})         // clé = pseudo -> { blob (chiffré par l'appli, illisible ici), ts }  -> sauvegarde distante champ par champ
-};
+  friends: load('friends.json', {}),      // v5.23 : clé = pseudo en minuscules -> { f: [amis], in: [demandes reçues], out: [demandes envoyées] } (pseudos en minuscules)
+  dms: load('dms.json', []),              // v5.23 : messages privés { id, from, to, text, image, ts } (pseudos en minuscules)
+  groups: load('groups.json', {}),        // v5.23 : groupes { id, name, owner, members: [pseudos en minuscules], created }
+  gmsgs: load('gmsgs.json', []),
+  steam: load('steam.json', {}),          // v5.25 : pseudo -> [{ id, label, steamId, shared }]
+  vaults: load('vaults.json', {}),        // v5.25 : pseudo -> { blob (chiffré par l'appli, illisible ici), ts }          // v5.23 : messages de groupe { id, g, user, text, image, ts }
+  seq: Object.assign({ msg: 0, notif: 0, dm: 0, grp: 0, gmsg: 0 }, load('seq.json', {}))
+});
+}
 const dirty = new Set(); let timer = null;
 function save(...names) {
   names.forEach(n => dirty.add(n));
@@ -38,113 +42,146 @@ function flush() {
   for (const n of dirty) {
     const f = path.join(DATA, n + '.json'), tmp = f + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(db[n])); fs.renameSync(tmp, f);
-    if (REMOTE && remoteReady && n !== 'vaults') rdirty.add(n);
+    ghQueue.add(n + '.json'); rQueue.add(n + '.json');
   }
   dirty.clear();
-  if (REMOTE && remoteReady && rdirty.size && !rtimer) rtimer = setTimeout(() => { rtimer = null; rpush(); }, 1000);
 }
+process.on('SIGINT', () => { flush(); Promise.all([ghFinal(), rFinal()]).then(() => process.exit(0)); });
+process.on('SIGTERM', () => { flush(); Promise.all([ghFinal(), rFinal()]).then(() => process.exit(0)); });
 
-// ---------------------------------------------------------------- sauvegarde distante GRATUITE (Upstash Redis, API REST)
-// Sur un hébergeur gratuit sans disque, les fichiers sont effacés à chaque redémarrage. Si UPSTASH_REDIS_REST_URL et
-// UPSTASH_REDIS_REST_TOKEN sont définies, comptes, messages, notifications et images sont aussi enregistrés chez Upstash
-// et restaurés au démarrage. Sans ces variables, rien ne change (stockage local seulement).
+
+// ---------------------------------------------------------------- v5.24 : sauvegarde durable (GitHub)
+// Sur l'offre gratuite de Render le disque est EFFACE a chaque redemarrage (le service s'endort apres 15 min) :
+// comptes, sessions, amis, messages, images et vocaux disparaissaient -> les comptes « se deconnectaient tout seuls ».
+// Avec GH_TOKEN + GH_REPO (depot PRIVE), chaque fichier de DATA_DIR est copie sur GitHub et restaure au demarrage.
+const GH = {
+  token: process.env.GH_TOKEN || '', repo: process.env.GH_REPO || '', branch: process.env.GH_BRANCH || 'main',
+  dir: (process.env.GH_DIR || 'gondzet-data').replace(/^\/+|\/+$/g, ''), api: (process.env.GH_API || 'https://api.github.com').replace(/\/$/, '')
+};
+const GH_ON = !!(GH.token && GH.repo);
+const ghQueue = new Set(), ghSha = {};   // fichiers a envoyer / sha connu sur GitHub
+async function ghFetch(method, url, body, raw) {
+  const r = await fetch(GH.api + url, {
+    method, body: body ? JSON.stringify(body) : undefined,
+    headers: Object.assign({ Authorization: 'Bearer ' + GH.token, 'User-Agent': 'g-ondzet-server', 'X-GitHub-Api-Version': '2022-11-28',
+      Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json' }, body ? { 'Content-Type': 'application/json' } : {})
+  });
+  return r;
+}
+const ghPath = rel => '/repos/' + GH.repo + '/contents/' + GH.dir + '/' + rel.split('/').map(encodeURIComponent).join('/');
+async function ghRestore() {
+  if (!GH_ON) { console.log('Sauvegarde durable : DESACTIVEE (GH_TOKEN / GH_REPO absents) - sur Render gratuit les donnees sont perdues au redemarrage'); return; }
+  try {
+    const t = await ghFetch('GET', '/repos/' + GH.repo + '/git/trees/' + encodeURIComponent(GH.branch) + '?recursive=1');
+    if (t.status === 404 || t.status === 409) { console.log('Sauvegarde GitHub : depot vide, on demarre a neuf'); return; }
+    if (!t.ok) throw new Error('arbre GitHub ' + t.status);
+    const tree = (await t.json()).tree || [], pre = GH.dir + '/';
+    const files = tree.filter(x => x.type === 'blob' && x.path.startsWith(pre)).map(x => ({ rel: x.path.slice(pre.length), sha: x.sha }))
+      .filter(x => /^(?:[a-z_]+\.json|uploads\/[0-9a-f]{32}\.(?:png|jpg|gif|webp|m4a|webm|ogg))$/.test(x.rel));
+    let n = 0, i = 0;
+    await Promise.all(Array.from({ length: 6 }, async () => {
+      while (i < files.length) {
+        const f = files[i++], dst = path.join(DATA, f.rel);
+        if (f.rel.startsWith('uploads/') && fs.existsSync(dst)) { ghSha[f.rel] = f.sha; continue; }
+        const r = await ghFetch('GET', ghPath(f.rel) + '?ref=' + encodeURIComponent(GH.branch), null, true);
+        if (!r.ok) { console.error('restauration ' + f.rel + ' : ' + r.status); continue; }
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        fs.writeFileSync(dst, Buffer.from(await r.arrayBuffer())); ghSha[f.rel] = f.sha; n++;
+      }
+    }));
+    console.log('Sauvegarde GitHub : ' + n + ' fichier(s) restaure(s)');
+  } catch (e) { console.error('Restauration GitHub impossible :', e.message); }
+}
+let ghBusy = false;
+async function ghPush() {
+  if (!GH_ON || ghBusy || !ghQueue.size) return;
+  ghBusy = true;
+  const list = Array.from(ghQueue); list.forEach(x => ghQueue.delete(x));
+  for (const rel of list) {
+    try {
+      const f = path.join(DATA, rel); if (!fs.existsSync(f)) continue;
+      const content = fs.readFileSync(f).toString('base64');
+      for (let k = 0; k < 3; k++) {
+        const r = await ghFetch('PUT', ghPath(rel), { message: 'sauvegarde ' + rel, content, branch: GH.branch, sha: ghSha[rel] });
+        if (r.ok) { const j = await r.json(); ghSha[rel] = j.content && j.content.sha; break; }
+        if (r.status === 409 || r.status === 422) {   // sha perime ou fichier deja la : on relit son sha
+          const g = await ghFetch('GET', ghPath(rel) + '?ref=' + encodeURIComponent(GH.branch));
+          if (g.ok) { ghSha[rel] = (await g.json()).sha; continue; }
+          delete ghSha[rel]; continue;
+        }
+        throw new Error('PUT ' + rel + ' : ' + r.status);
+      }
+    } catch (e) { console.error('sauvegarde ' + rel + ' :', e.message); ghQueue.add(rel); }
+  }
+  ghBusy = false;
+}
+setInterval(() => { flush(); ghPush().catch(() => { ghBusy = false; }); }, +process.env.GH_EVERY_MS || 20e3).unref();
+async function ghFinal() { try { flush(); ghBusy = false; await ghPush(); } catch (e) { } }
+
+// ---------------------------------------------------------------- v5.25 : sauvegarde durable GRATUITE alternative (Upstash Redis, API REST)
+// Variables : UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN (inutile si la sauvegarde GitHub ci-dessus est active : une seule à la fois).
+// Chaque fichier (JSON, images, vocaux) est coupé en morceaux < 1 Mo (limite de l'offre gratuite) sous une clé versionnée ;
+// un pointeur est changé en dernier, donc une coupure en plein envoi ne corrompt jamais la version précédente.
 const R_URL = (process.env.UPSTASH_REDIS_REST_URL || '').replace(/\/+$/, ''), R_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
-const REMOTE = /^(https:\/\/|http:\/\/localhost[:/])/.test(R_URL + '/') && !!R_TOKEN;
+const REMOTE = !GH_ON && /^(https:\/\/|http:\/\/localhost[:/])/.test(R_URL + '/') && !!R_TOKEN;
+const RK = 'gondzet:f:', RCHUNK = 700000, rQueue = new Set();
+const JSON_NAMES = ['users', 'sessions', 'messages', 'notifs', 'friends', 'dms', 'groups', 'gmsgs', 'steam', 'vaults', 'seq'];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-let remoteReady = false, rtimer = null, rretry = null, rchain = Promise.resolve();
-const rdirty = new Set(), rimg = new Set();
 async function rcmd(args) {
-  const r = await fetch(R_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + R_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(args), signal: AbortSignal.timeout(15000) });
+  const r = await fetch(R_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + R_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(args), signal: AbortSignal.timeout(20000) });
   let j = {}; try { j = await r.json(); } catch (e) { }
   if (!r.ok || j.error) throw new Error(j.error || 'HTTP ' + r.status);
   return j.result;
 }
-function dropImage(name) {
-  fs.unlink(path.join(UP, name), () => { });
-  if (REMOTE) rcmd(['DEL', 'gondzet:img:' + name]).catch(() => { });
+async function rPut(rel, buf) {
+  const b64 = buf.toString('base64'), n = Math.max(1, Math.ceil(b64.length / RCHUNK)), ver = Date.now().toString(36);
+  for (let i = 0; i < n; i++) await rcmd(['SET', RK + rel + ':' + ver + ':' + i, b64.slice(i * RCHUNK, (i + 1) * RCHUNK)]);
+  const old = await rcmd(['GET', RK + rel]);
+  await rcmd(['SET', RK + rel, JSON.stringify({ ver, n })]);
+  if (old) { try { const o = JSON.parse(old); for (let i = 0; i < o.n; i++) rcmd(['DEL', RK + rel + ':' + o.ver + ':' + i]).catch(() => { }); } catch (e) { } }
 }
-async function rpushLoop() {
-  while (rdirty.size) {
-    const n = rdirty.values().next().value;
-    rdirty.delete(n);
-    let body = JSON.stringify(db[n]);
-    let trimmed = false;
-    while (Array.isArray(db[n]) && body.length > 900000 && db[n].length > 100) {   // l'offre gratuite limite la taille d'une requête (~1 Mo)
-      db[n].splice(0, 100).forEach(m => m.image && dropImage(m.image));
-      body = JSON.stringify(db[n]); trimmed = true;
-    }
-    if (trimmed) save(n);
-    try { await rcmd(['SET', 'gondzet:' + n, body]); }
+async function rGet(rel) {
+  const ptr = await rcmd(['GET', RK + rel]);
+  if (!ptr) return null;
+  const { ver, n } = JSON.parse(ptr), parts = [];
+  for (let i = 0; i < n; i++) { const c = await rcmd(['GET', RK + rel + ':' + ver + ':' + i]); if (c == null) throw new Error('morceau manquant : ' + rel); parts.push(c); }
+  return Buffer.from(parts.join(''), 'base64');
+}
+let rReady = false, rRetry = null, rChain = Promise.resolve();
+async function rLoop() {
+  while (rQueue.size) {
+    const rel = rQueue.values().next().value; rQueue.delete(rel);
+    try { const f = path.join(DATA, rel); if (fs.existsSync(f)) await rPut(rel, fs.readFileSync(f)); }
     catch (e) {
-      rdirty.add(n);
-      console.error('Sauvegarde distante impossible (' + n + ') :', e.message);
-      if (!rretry) rretry = setTimeout(() => { rretry = null; rpush(); }, 10000);
+      rQueue.add(rel); console.error('Sauvegarde Upstash impossible (' + rel + ') : ' + e.message);
+      if (!rRetry) rRetry = setTimeout(() => { rRetry = null; rPush(); }, 10000);
       return;
     }
   }
 }
-function rpush() { if (REMOTE && remoteReady) rchain = rchain.then(rpushLoop); return rchain; }
-function rstoreImage(name, buf) {
-  if (!REMOTE) return;
-  const b64 = buf.toString('base64');
-  const p = (async () => {
-    for (let i = 0; i < 3; i++) { try { await rcmd(['SET', 'gondzet:img:' + name, b64]); return; } catch (e) { await sleep(2000 * (i + 1)); } }
-    console.error('Image non sauvegardée en ligne : ' + name);
-  })();
-  rimg.add(p); p.finally(() => rimg.delete(p));
-}
-async function rfetchImage(name, f) {
-  if (!REMOTE) return false;
-  try { const v = await rcmd(['GET', 'gondzet:img:' + name]); if (!v) return false; fs.writeFileSync(f, Buffer.from(v, 'base64')); return true; }
-  catch (e) { return false; }
-}
-function rbg(args) {   // commande distante en arrière-plan, avec 3 essais
-  if (!REMOTE) return;
-  const p = (async () => {
-    for (let i = 0; i < 3; i++) { try { await rcmd(args); return; } catch (e) { await sleep(2000 * (i + 1)); } }
-    console.error('Commande distante abandonnée : ' + args[0] + ' ' + args[1]);
-  })();
-  rimg.add(p); p.finally(() => rimg.delete(p));
-}
-async function restore() {
-  if (!REMOTE) return;
+function rPush() { if (REMOTE && rReady) rChain = rChain.then(rLoop); return rChain; }
+async function rFinal() { if (!REMOTE || !rReady) return; try { flush(); await Promise.race([rPush(), sleep(8000)]); } catch (e) { } }
+async function rRestore() {
+  if (!REMOTE) { if (!GH_ON) console.log('Sauvegarde Upstash : désactivée (variables absentes)'); return; }
   for (let attempt = 1; ; attempt++) {
     try {
-      for (const n of Object.keys(db)) {
-        if (n === 'vaults') continue;
-        const v = await rcmd(['GET', 'gondzet:' + n]);
-        if (v == null) { rdirty.add(n); continue; }   // rien en ligne pour l'instant : on enverra ce qu'on a
-        const data = JSON.parse(v);
-        if (Array.isArray(db[n])) { db[n].length = 0; for (const x of data) db[n].push(x); }
-        else { for (const k of Object.keys(db[n])) delete db[n][k]; Object.assign(db[n], data); }
-        fs.writeFileSync(path.join(DATA, n + '.json'), JSON.stringify(db[n]));
+      let n = 0;
+      for (const name of JSON_NAMES) {
+        const buf = await rGet(name + '.json');
+        if (buf) { fs.writeFileSync(path.join(DATA, name + '.json'), buf); n++; }
+        else if (fs.existsSync(path.join(DATA, name + '.json'))) rQueue.add(name + '.json');   // rien en ligne : on envoie ce qu'on a
       }
-      const h = await rcmd(['HGETALL', 'gondzet:vaults']), rv = {};
-      if (Array.isArray(h)) for (let i = 0; i + 1 < h.length; i += 2) rv[h[i]] = h[i + 1];
-      else if (h && typeof h === 'object') Object.assign(rv, h);
-      if (Object.keys(rv).length) {
-        for (const k of Object.keys(db.vaults)) delete db.vaults[k];
-        for (const [k, v] of Object.entries(rv)) { try { db.vaults[k] = JSON.parse(v); } catch (e) { } }
-        fs.writeFileSync(path.join(DATA, 'vaults.json'), JSON.stringify(db.vaults));
-      } else for (const [k, v] of Object.entries(db.vaults)) rbg(['HSET', 'gondzet:vaults', k, JSON.stringify(v)]);
-      remoteReady = true; rpush();
-      console.log('Sauvegarde distante active : données restaurées');
+      rReady = true; rPush();
+      console.log('Sauvegarde Upstash active : ' + n + ' fichier(s) restauré(s)');
       return;
     } catch (e) {
-      console.error('Sauvegarde distante : restauration impossible (essai ' + attempt + ') :', e.message);
+      console.error('Sauvegarde Upstash : restauration impossible (essai ' + attempt + ') : ' + e.message);
       if (attempt >= 5) { console.error('Arrêt pour ne pas écraser les données en ligne.'); process.exit(1); }
       await sleep(3000 * attempt);
     }
   }
 }
-let closing = false;
-async function shutdown() {
-  if (closing) return; closing = true;
-  try { flush(); await Promise.race([Promise.allSettled([...rimg]).then(() => rpush()), sleep(8000)]); } catch (e) { }
-  process.exit(0);
-}
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+setInterval(() => { if (rQueue.size) { flush(); rPush(); } }, 3000).unref();
 
 // ---------------------------------------------------------------- outils
 const sha = s => crypto.createHash('sha256').update(s).digest('hex');
@@ -187,7 +224,6 @@ function readJson(req, limit) {
 }
 const str = (v, min, max) => typeof v === 'string' && v.trim().length >= min && v.trim().length <= max ? v.trim() : null;
 
-const seen = new Map();   // dernière activité (en mémoire) pour « en ligne »
 function newSession(username) {
   const token = crypto.randomBytes(32).toString('hex');
   db.sessions[sha(token)] = { user: username, ts: Date.now() };
@@ -200,7 +236,6 @@ function auth(req) {
   const u = db.users[s.user.toLowerCase()];
   if (!u) throw new HttpErr(401, 'Connexion requise');
   if (u.banned) throw new HttpErr(403, 'Compte suspendu');
-  seen.set(u.name.toLowerCase(), Date.now());
   return u;
 }
 function admin(req) {
@@ -209,6 +244,15 @@ function admin(req) {
   if (!safeEq(String(req.headers['x-admin-key'] || ''), ADMIN_KEY)) throw new HttpErr(403, 'Clé administrateur incorrecte');
 }
 const pub = u => ({ username: u.name });
+// v5.23 : amis / groupes
+const dn = k => (db.users[k] ? db.users[k].name : k);                                   // pseudo affiché
+const frk = k => db.friends[k] || (db.friends[k] = { f: [], in: [], out: [] });          // fiche d'amis d'un pseudo (minuscules)
+const fr = u => frk(u.name.toLowerCase());
+function becomeFriends(a, b) {
+  const x = frk(a), y = frk(b), del = (l, v) => { const i = l.indexOf(v); if (i >= 0) l.splice(i, 1) };
+  [[x, b], [y, a]].forEach(([r, v]) => { del(r.in, v); del(r.out, v); if (!r.f.includes(v)) r.f.push(v) });
+}
+const gpub = g => ({ id: g.id, name: g.name, owner: dn(g.owner), members: g.members.map(dn) });
 
 // ---------------------------------------------------------------- images
 const MAGIC = [
@@ -217,43 +261,41 @@ const MAGIC = [
   ['gif', b => b.length > 6 && /^GIF8[79]a$/.test(b.slice(0, 6).toString('latin1'))],
   ['webp', b => b.length > 12 && b.slice(0, 4).toString('latin1') === 'RIFF' && b.slice(8, 12).toString('latin1') === 'WEBP']
 ];
-const MIME = { png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+const MIME = { png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', m4a: 'audio/mp4', webm: 'audio/webm', ogg: 'audio/ogg' };
 function saveImage(dataUrl) {
   const m = /^data:image\/[a-z+.-]+;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl || '');
   if (!m) throw new HttpErr(400, 'Image invalide');
   const buf = Buffer.from(m[1], 'base64');
   if (buf.length > 3 * 1024 * 1024) throw new HttpErr(413, 'Image trop lourde (3 Mo max)');
-  if (REMOTE && buf.length > 700 * 1024) throw new HttpErr(413, 'Image trop lourde (700 Ko max)');   // limite de l'offre gratuite de sauvegarde en ligne
   const t = MAGIC.find(x => x[1](buf));
   if (!t) throw new HttpErr(400, 'Format accepté : PNG, JPEG, GIF, WebP');
   const name = crypto.randomBytes(16).toString('hex') + '.' + t[0];
-  fs.writeFileSync(path.join(UP, name), buf);
-  rstoreImage(name, buf);
+  fs.writeFileSync(path.join(UP, name), buf); ghQueue.add('uploads/' + name); rQueue.add('uploads/' + name);
   return name;
 }
+// v5.24 : messages vocaux (m4a / webm / ogg, 1,5 Mo max, 60 s max)
+const AMAGIC = [
+  ['m4a', b => b.length > 12 && b.slice(4, 8).toString('latin1') === 'ftyp'],
+  ['webm', b => b.length > 4 && b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3],
+  ['ogg', b => b.length > 4 && b.slice(0, 4).toString('latin1') === 'OggS']
+];
+function saveAudio(dataUrl) {
+  const m = /^data:audio\/[a-z0-9+.-]+(?:;codecs=[a-z0-9.,]+)?;base64,([A-Za-z0-9+/=]+)$/i.exec(dataUrl || '');
+  if (!m) throw new HttpErr(400, 'Message vocal invalide');
+  const buf = Buffer.from(m[1], 'base64');
+  if (buf.length > 1.5 * 1024 * 1024) throw new HttpErr(413, 'Message vocal trop long (60 s max)');
+  const t = AMAGIC.find(x => x[1](buf));
+  if (!t) throw new HttpErr(400, 'Format vocal non reconnu');
+  const name = crypto.randomBytes(16).toString('hex') + '.' + t[0];
+  fs.writeFileSync(path.join(UP, name), buf); ghQueue.add('uploads/' + name); rQueue.add('uploads/' + name);
+  return name;
+}
+const durOf = v => Math.max(0, Math.min(60000, Math.round(+v || 0)));
 
 // ---------------------------------------------------------------- routes API
 const USER_RE = /^[A-Za-z0-9_.-]{3,20}$/;
-// ---------------------------------------------------------------- amis, discussions privées, comptes Steam
-const keyOf = n => String(n || '').trim().toLowerCase();
-const online = k => Date.now() - (seen.get(k) || 0) < 120e3;
-const rmFrom = (arr, x) => { const i = arr.indexOf(x); if (i >= 0) arr.splice(i, 1); };
-function rel(k) { return db.friends[k] || (db.friends[k] = { f: [], in: [], out: [] }); }
-const areFriends = (a, b) => !!db.friends[a] && db.friends[a].f.includes(b);
-function otherUser(b, meKey) {
-  const k = keyOf(b && b.username), t = db.users[k];
-  if (!t || t.banned) throw new HttpErr(404, 'Utilisateur introuvable');
-  if (k === meKey) throw new HttpErr(400, 'Tu ne peux pas faire ça avec toi-même');
-  return [k, t];
-}
-function makeFriends(a, b) {
-  const ra = rel(a), rb2 = rel(b);
-  [ra.in, ra.out].forEach(l => rmFrom(l, b)); [rb2.in, rb2.out].forEach(l => rmFrom(l, a));
-  if (!ra.f.includes(b)) ra.f.push(b);
-  if (!rb2.f.includes(a)) rb2.f.push(a);
-}
-function dropDmImage(m) { if (m.image) dropImage(m.image); }
-function steamId(v) {
+// ---------------------------------------------------------------- v5.25 : mes comptes Steam (liste lisible) + coffre chiffré (illisible par le serveur)
+function steamIdOf(v) {
   v = String(v || '').trim();
   const m = /^https?:\/\/steamcommunity\.com\/(?:id|profiles)\/([A-Za-z0-9_-]{2,32}|\d{17})\/?$/i.exec(v);
   if (m) v = m[1];
@@ -321,123 +363,140 @@ const routes = {
     if (limited('chat|' + u.name, 20, 60e3)) throw new HttpErr(429, 'Doucement : trop de messages');
     const b = await readJson(req, 5 * 1024 * 1024);
     const text = typeof b.text === 'string' ? b.text.trim().slice(0, 1000) : '';
-    const image = b.image ? saveImage(b.image) : null;
-    if (!text && !image) throw new HttpErr(400, 'Message vide');
+    const image = b.image ? saveImage(b.image) : null, audio = b.audio ? saveAudio(b.audio) : null;
+    if (!text && !image && !audio) throw new HttpErr(400, 'Message vide');
     const m = { id: ++db.seq.msg, user: u.name, text, image, ts: Date.now() };
+    if (audio) { m.audio = audio; m.dur = durOf(b.dur); }
     db.messages.push(m);
     if (db.messages.length > 2000) db.messages.splice(0, db.messages.length - 2000);
     save('messages', 'seq');
     send(res, 201, m);
   },
 
-  // notifications (promos, codes) : visibles par tous, par un pseudo précis, ou par un thème précis
-  'GET /v1/notifications': async (req, res, url) => {
-    const u = auth(req), after = +url.searchParams.get('after') || 0, th = url.searchParams.get('theme');
-    const l = db.notifs.filter(n => n.id > after && (!n.to || n.to.toLowerCase() === u.name.toLowerCase())
-      && (n.theme == null || String(n.theme) === th)).slice(-50);
-    send(res, 200, { notifications: l });
-  },
-
-  // ---- recherche et amis
-  'GET /v1/users/search': async (req, res, url) => {
-    const u = auth(req), me = u.name.toLowerCase();
-    if (limited('srch|' + me, 30, 60e3)) throw new HttpErr(429, 'Doucement : trop de recherches');
-    const q = keyOf(url.searchParams.get('q'));
-    if (q.length < 2 || q.length > 20) throw new HttpErr(400, 'Écris 2 à 20 caractères');
-    const r = rel(me);
-    const list = Object.values(db.users).filter(x => !x.banned && x.name.toLowerCase() !== me && x.name.toLowerCase().includes(q))
-      .sort((a, b) => (b.name.toLowerCase().startsWith(q) - a.name.toLowerCase().startsWith(q)) || a.name.localeCompare(b.name)).slice(0, 20)
-      .map(x => { const k = x.name.toLowerCase(); return { username: x.name, status: r.f.includes(k) ? 'friend' : r.out.includes(k) ? 'outgoing' : r.in.includes(k) ? 'incoming' : 'none' }; });
-    send(res, 200, { users: list });
-  },
+  // ---- v5.23 : amis, messages privés, groupes ----
   'GET /v1/friends': async (req, res) => {
-    const me = auth(req).name.toLowerCase(), r = rel(me);
-    const nm = k => db.users[k] && !db.users[k].banned ? db.users[k].name : null;
-    send(res, 200, {
-      friends: r.f.map(k => nm(k) && { username: nm(k), online: online(k) }).filter(Boolean),
-      incoming: r.in.map(k => nm(k) && { username: nm(k) }).filter(Boolean),
-      outgoing: r.out.map(k => nm(k) && { username: nm(k) }).filter(Boolean)
-    });
+    const u = auth(req), me = fr(u);
+    send(res, 200, { friends: me.f.map(dn), incoming: me.in.map(dn), outgoing: me.out.map(dn) });
   },
+  // demande d'ami (si l'autre t'avait déjà demandé : vous devenez amis directement)
   'POST /v1/friends/request': async (req, res) => {
-    const u = auth(req), me = u.name.toLowerCase();
-    if (limited('freq|' + me, 20, 3600e3)) throw new HttpErr(429, 'Trop de demandes, réessaie plus tard');
-    const [k] = otherUser(await readJson(req, 2e3), me), mine = rel(me), theirs = rel(k);
-    if (mine.f.includes(k)) throw new HttpErr(409, 'Vous êtes déjà amis');
-    if (mine.in.includes(k)) { makeFriends(me, k); save('friends'); return send(res, 200, { status: 'friends' }); }   // il t'avait déjà invité
-    if (mine.out.includes(k)) throw new HttpErr(409, 'Demande déjà envoyée');
-    if (mine.f.length >= 100 || mine.out.length >= 50 || theirs.in.length >= 100) throw new HttpErr(409, 'Limite atteinte');
-    mine.out.push(k); theirs.in.push(me); save('friends');
-    send(res, 201, { status: 'pending' });
+    const u = auth(req);
+    if (limited('frq|' + u.name, 20, 60e3)) throw new HttpErr(429, 'Doucement : trop de demandes');
+    const b = await readJson(req, 2e3), k = String(b.name || '').trim().toLowerCase(), t = db.users[k];
+    if (!t) throw new HttpErr(404, 'Aucun joueur de ce nom');
+    const mk = u.name.toLowerCase();
+    if (k === mk) throw new HttpErr(400, 'Tu ne peux pas t\'ajouter toi-même');
+    const me = fr(u), ot = fr(t);
+    if (me.f.includes(k)) return send(res, 200, { status: 'friends', name: t.name });
+    if (me.in.includes(k)) { becomeFriends(mk, k); save('friends'); return send(res, 200, { status: 'friends', name: t.name }); }
+    if (!me.out.includes(k)) { me.out.push(k); ot.in.push(mk); save('friends'); }
+    send(res, 200, { status: 'pending', name: t.name });
   },
   'POST /v1/friends/accept': async (req, res) => {
-    const me = auth(req).name.toLowerCase(), [k] = otherUser(await readJson(req, 2e3), me);
-    if (!rel(me).in.includes(k)) throw new HttpErr(404, 'Aucune demande de cette personne');
-    makeFriends(me, k); save('friends');
-    send(res, 200, { status: 'friends' });
+    const u = auth(req), b = await readJson(req, 2e3), k = String(b.name || '').trim().toLowerCase(), mk = u.name.toLowerCase();
+    if (!fr(u).in.includes(k)) throw new HttpErr(404, 'Aucune demande de ce joueur');
+    becomeFriends(mk, k); save('friends');
+    send(res, 200, { status: 'friends', name: dn(k) });
   },
-  'POST /v1/friends/decline': async (req, res) => {   // refuse une demande reçue ou annule une demande envoyée
-    const me = auth(req).name.toLowerCase(), [k] = otherUser(await readJson(req, 2e3), me);
-    const mine = rel(me), theirs = rel(k);
-    rmFrom(mine.in, k); rmFrom(mine.out, k); rmFrom(theirs.in, me); rmFrom(theirs.out, me);
-    save('friends');
-    send(res, 200, { ok: true });
-  },
+  // refuse une demande, annule la tienne ou retire un ami
   'POST /v1/friends/remove': async (req, res) => {
-    const me = auth(req).name.toLowerCase(), [k] = otherUser(await readJson(req, 2e3), me);
-    rmFrom(rel(me).f, k); rmFrom(rel(k).f, me); save('friends');
-    send(res, 200, { ok: true });
+    const u = auth(req), b = await readJson(req, 2e3), k = String(b.name || '').trim().toLowerCase(), mk = u.name.toLowerCase();
+    const me = fr(u), ot = frk(k), del = (l, x) => { const i = l.indexOf(x); if (i >= 0) l.splice(i, 1) };
+    del(me.f, k); del(me.in, k); del(me.out, k); del(ot.f, mk); del(ot.in, mk); del(ot.out, mk);
+    save('friends'); send(res, 200, { ok: true });
   },
-
-  // ---- discussions privées (entre amis uniquement pour écrire)
-  'GET /v1/dm': async (req, res) => {
-    const me = auth(req).name.toLowerCase(), reads = db.dmreads[me] || {}, conv = {};
-    for (const m of db.dms) {
-      const f = m.from.toLowerCase(), t = m.to.toLowerCase();
-      if (f !== me && t !== me) continue;
-      const o = f === me ? t : f, c = conv[o] || (conv[o] = { with: db.users[o] ? db.users[o].name : (f === me ? m.to : m.from), unread: 0, last: null });
-      c.last = { id: m.id, from: m.from, text: m.text, image: !!m.image, ts: m.ts };
-      if (f === o && m.id > (reads[o] || 0)) c.unread++;
+  // v5.24 : recherche de joueurs par morceau de pseudo (2 lettres min.) + lien avec toi : friend / incoming / outgoing / none
+  'GET /v1/users': async (req, res, url) => {
+    const u = auth(req), q = String(url.searchParams.get('q') || '').trim().toLowerCase().slice(0, 20), mk = u.name.toLowerCase();
+    if (q.length < 2) throw new HttpErr(400, 'Écris au moins 2 lettres');
+    if (limited('usr|' + u.name, 40, 60e3)) throw new HttpErr(429, 'Doucement : trop de recherches');
+    const me = fr(u), out = [];
+    for (const k of Object.keys(db.users)) {
+      if (k === mk || db.users[k].banned || !k.includes(q)) continue;
+      out.push({ name: db.users[k].name, rel: me.f.includes(k) ? 'friend' : me.in.includes(k) ? 'incoming' : me.out.includes(k) ? 'outgoing' : 'none', s: k.startsWith(q) ? 0 : 1 });
     }
-    const list = Object.values(conv).sort((a, b) => b.last.ts - a.last.ts);
-    send(res, 200, { conversations: list, unread: list.reduce((n, c) => n + c.unread, 0) });
+    out.sort((a, b) => a.s - b.s || a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    send(res, 200, { users: out.slice(0, 20).map(x => ({ name: x.name, rel: x.rel })) });
   },
-  'GET /v1/dm/thread': async (req, res, url) => {
-    const me = auth(req).name.toLowerCase(), o = keyOf(url.searchParams.get('with')), after = +url.searchParams.get('after') || 0;
-    if (!db.users[o]) throw new HttpErr(404, 'Utilisateur introuvable');
-    let l = db.dms.filter(m => m.id > after && ((m.from.toLowerCase() === me && m.to.toLowerCase() === o) || (m.from.toLowerCase() === o && m.to.toLowerCase() === me)));
+  'GET /v1/dm': async (req, res, url) => {
+    const u = auth(req), mk = u.name.toLowerCase(), k = String(url.searchParams.get('with') || '').toLowerCase(), after = +url.searchParams.get('after') || 0;
+    if (!fr(u).f.includes(k)) throw new HttpErr(403, 'Ce joueur n\'est pas dans tes amis');
+    let l = db.dms.filter(m => m.id > after && ((m.from === mk && m.to === k) || (m.from === k && m.to === mk)));
     if (!after) l = l.slice(-100);
-    l = l.slice(0, 200);
-    const lastIn = l.filter(m => m.from.toLowerCase() === o).map(m => m.id).pop();
-    if (lastIn) { const r = db.dmreads[me] || (db.dmreads[me] = {}); if (lastIn > (r[o] || 0)) { r[o] = lastIn; save('dmreads'); } }
-    send(res, 200, { messages: l, friend: areFriends(me, o) });
+    send(res, 200, { messages: l.slice(0, 200).map(m => ({ id: m.id, user: dn(m.from), text: m.text, image: m.image, audio: m.audio, dur: m.dur, ts: m.ts })) });
   },
-  'POST /v1/dm/send': async (req, res) => {
-    const u = auth(req), me = u.name.toLowerCase();
-    if (limited('dm|' + me, 30, 60e3)) throw new HttpErr(429, 'Doucement : trop de messages');
-    const b = await readJson(req, 5 * 1024 * 1024), [o, t] = otherUser({ username: b.to }, me);
-    if (!areFriends(me, o)) throw new HttpErr(403, 'Vous devez être amis pour discuter en privé');
-    const text = typeof b.text === 'string' ? b.text.trim().slice(0, 1000) : '';
-    const image = b.image ? saveImage(b.image) : null;
-    if (!text && !image) throw new HttpErr(400, 'Message vide');
-    db.seq.dm = (db.seq.dm || 0) + 1;
-    const m = { id: db.seq.dm, from: u.name, to: t.name, text, image, ts: Date.now() };
+  'POST /v1/dm': async (req, res) => {
+    const u = auth(req), mk = u.name.toLowerCase();
+    if (limited('dm|' + u.name, 30, 60e3)) throw new HttpErr(429, 'Doucement : trop de messages');
+    const b = await readJson(req, 5 * 1024 * 1024), k = String(b.to || '').toLowerCase();
+    if (!fr(u).f.includes(k)) throw new HttpErr(403, 'Ce joueur n\'est pas dans tes amis');
+    const text = typeof b.text === 'string' ? b.text.trim().slice(0, 1000) : '', image = b.image ? saveImage(b.image) : null, audio = b.audio ? saveAudio(b.audio) : null;
+    if (!text && !image && !audio) throw new HttpErr(400, 'Message vide');
+    const m = { id: ++db.seq.dm, from: mk, to: k, text, image, ts: Date.now() };
+    if (audio) { m.audio = audio; m.dur = durOf(b.dur); }
     db.dms.push(m);
-    const conv = db.dms.filter(x => (x.from === u.name && x.to === t.name) || (x.from === t.name && x.to === u.name));
-    if (conv.length > 500) conv.slice(0, conv.length - 500).forEach(x => { db.dms.splice(db.dms.indexOf(x), 1); dropDmImage(x); });
-    if (db.dms.length > 3000) db.dms.splice(0, db.dms.length - 3000).forEach(dropDmImage);
-    const r = db.dmreads[me] || (db.dmreads[me] = {}); r[o] = m.id;   // ce que j'écris est « lu » pour moi
-    save('dms', 'seq', 'dmreads');
-    send(res, 201, m);
+    if (db.dms.length > 5000) db.dms.splice(0, db.dms.length - 5000);
+    save('dms', 'seq');
+    send(res, 201, { id: m.id, user: u.name, text, image, audio: m.audio, dur: m.dur, ts: m.ts });
   },
-  'POST /v1/dm/delete': async (req, res) => {   // supprime un de mes messages privés
-    const u = auth(req), id = +(await readJson(req, 2e3)).id, i = db.dms.findIndex(m => m.id === id && m.from === u.name);
-    if (i < 0) throw new HttpErr(404, 'Introuvable');
-    dropDmImage(db.dms.splice(i, 1)[0]); save('dms');
+  'GET /v1/groups': async (req, res) => {
+    const u = auth(req), mk = u.name.toLowerCase();
+    send(res, 200, { groups: Object.values(db.groups).filter(g => g.members.includes(mk)).map(gpub) });
+  },
+  // crée un groupe : { name, members: [amis] }
+  'POST /v1/groups': async (req, res) => {
+    const u = auth(req), mk = u.name.toLowerCase(), me = fr(u);
+    if (limited('grp|' + u.name, 10, 600e3)) throw new HttpErr(429, 'Trop de groupes créés');
+    const b = await readJson(req, 5e3), name = String(b.name || '').trim().slice(0, 30);
+    if (name.length < 2) throw new HttpErr(400, 'Donne un nom au groupe (2 caractères min.)');
+    const list = Array.isArray(b.members) ? b.members.map(x => String(x).toLowerCase()) : [];
+    const mem = [mk];
+    list.forEach(k => { if (!mem.includes(k)) { if (!me.f.includes(k)) throw new HttpErr(403, (dn(k) || k) + ' n\'est pas dans tes amis'); mem.push(k) } });
+    if (mem.length > 20) throw new HttpErr(400, '20 membres maximum');
+    const g = { id: ++db.seq.grp, name, owner: mk, members: mem, created: Date.now() };
+    db.groups[g.id] = g; save('groups', 'seq');
+    send(res, 201, gpub(g));
+  },
+  'POST /v1/groups/add': async (req, res) => {
+    const u = auth(req), b = await readJson(req, 2e3), g = db.groups[+b.id], k = String(b.name || '').toLowerCase();
+    if (!g || !g.members.includes(u.name.toLowerCase())) throw new HttpErr(404, 'Groupe introuvable');
+    if (!fr(u).f.includes(k)) throw new HttpErr(403, 'Ce joueur n\'est pas dans tes amis');
+    if (!g.members.includes(k)) { if (g.members.length >= 20) throw new HttpErr(400, '20 membres maximum'); g.members.push(k); save('groups') }
+    send(res, 200, gpub(g));
+  },
+  'POST /v1/groups/leave': async (req, res) => {
+    const u = auth(req), mk = u.name.toLowerCase(), b = await readJson(req, 2e3), g = db.groups[+b.id];
+    if (!g || !g.members.includes(mk)) throw new HttpErr(404, 'Groupe introuvable');
+    g.members = g.members.filter(x => x !== mk);
+    if (!g.members.length) { delete db.groups[g.id]; db.gmsgs = db.gmsgs.filter(m => m.g !== g.id); save('groups', 'gmsgs'); }
+    else { if (g.owner === mk) g.owner = g.members[0]; save('groups'); }
     send(res, 200, { ok: true });
   },
+  'GET /v1/group': async (req, res, url) => {
+    const u = auth(req), g = db.groups[+url.searchParams.get('id')], after = +url.searchParams.get('after') || 0;
+    if (!g || !g.members.includes(u.name.toLowerCase())) throw new HttpErr(404, 'Groupe introuvable');
+    let l = db.gmsgs.filter(m => m.g === g.id && m.id > after);
+    if (!after) l = l.slice(-100);
+    send(res, 200, { group: gpub(g), messages: l.slice(0, 200).map(m => ({ id: m.id, user: m.user, text: m.text, image: m.image, audio: m.audio, dur: m.dur, ts: m.ts })) });
+  },
+  'POST /v1/group': async (req, res) => {
+    const u = auth(req);
+    if (limited('gm|' + u.name, 30, 60e3)) throw new HttpErr(429, 'Doucement : trop de messages');
+    const b = await readJson(req, 5 * 1024 * 1024), g = db.groups[+b.id];
+    if (!g || !g.members.includes(u.name.toLowerCase())) throw new HttpErr(404, 'Groupe introuvable');
+    const text = typeof b.text === 'string' ? b.text.trim().slice(0, 1000) : '', image = b.image ? saveImage(b.image) : null, audio = b.audio ? saveAudio(b.audio) : null;
+    if (!text && !image && !audio) throw new HttpErr(400, 'Message vide');
+    const m = { id: ++db.seq.gmsg, g: g.id, user: u.name, text, image, ts: Date.now() };
+    if (audio) { m.audio = audio; m.dur = durOf(b.dur); }
+    db.gmsgs.push(m);
+    if (db.gmsgs.length > 5000) db.gmsgs.splice(0, db.gmsgs.length - 5000);
+    save('gmsgs', 'seq');
+    send(res, 201, { id: m.id, user: u.name, text, image, audio: m.audio, dur: m.dur, ts: m.ts });
+  },
 
-  // ---- mes comptes Steam (liste lisible) et coffre chiffré (illisible par le serveur)
+  // notifications (promos, codes) : visibles par tous, par un pseudo précis, ou par un thème précis
+
+  // ---- v5.25 : comptes Steam et coffre
   'GET /v1/steam': async (req, res) => {
     const me = auth(req).name.toLowerCase();
     send(res, 200, { accounts: db.steam[me] || [], vault: db.vaults[me] ? { has: true, ts: db.vaults[me].ts } : { has: false } });
@@ -446,7 +505,7 @@ const routes = {
     const me = auth(req).name.toLowerCase(), b = await readJson(req, 20e3);
     if (!Array.isArray(b.accounts) || b.accounts.length > 5) throw new HttpErr(400, '5 comptes Steam maximum');
     const out = b.accounts.map(a => {
-      const label = cleanLabel(a && a.label), sid = steamId(a && a.steamId);
+      const label = cleanLabel(a && a.label), sid = steamIdOf(a && a.steamId);
       if (!label) throw new HttpErr(400, 'Donne un nom à chaque compte');
       if (!sid) throw new HttpErr(400, 'Identifiant Steam invalide (SteamID64, nom de profil ou lien steamcommunity.com)');
       return { id: /^[0-9a-f]{8}$/.test(String(a.id)) ? a.id : crypto.randomBytes(4).toString('hex'), label, steamId: sid, shared: a.shared === true };
@@ -455,9 +514,9 @@ const routes = {
     send(res, 200, { accounts: out });
   },
   'GET /v1/steam/friend': async (req, res, url) => {   // comptes que l'ami a choisi de partager
-    const me = auth(req).name.toLowerCase(), o = keyOf(url.searchParams.get('username'));
+    const u = auth(req), o = String(url.searchParams.get('username') || '').trim().toLowerCase();
     if (!db.users[o]) throw new HttpErr(404, 'Utilisateur introuvable');
-    if (!areFriends(me, o)) throw new HttpErr(403, 'Réservé à tes amis');
+    if (!fr(u).f.includes(o)) throw new HttpErr(403, 'Réservé à tes amis');
     send(res, 200, { username: db.users[o].name, accounts: (db.steam[o] || []).filter(a => a.shared).map(a => ({ label: a.label, steamId: a.steamId })) });
   },
   'GET /v1/vault': async (req, res) => {
@@ -470,15 +529,20 @@ const routes = {
     if (limited('vault|' + me, 30, 3600e3)) throw new HttpErr(429, 'Trop de sauvegardes, réessaie plus tard');
     const b = await readJson(req, 200e3);
     if (typeof b.blob !== 'string' || !b.blob.length || b.blob.length > 131072) throw new HttpErr(400, 'Coffre invalide (128 Ko max)');
-    const v = { blob: b.blob, ts: Date.now() };
-    db.vaults[me] = v; save('vaults');
-    rbg(['HSET', 'gondzet:vaults', me, JSON.stringify(v)]);
-    send(res, 200, { ts: v.ts });
+    db.vaults[me] = { blob: b.blob, ts: Date.now() }; save('vaults');
+    send(res, 200, { ts: db.vaults[me].ts });
   },
   'POST /v1/vault/delete': async (req, res) => {
     const me = auth(req).name.toLowerCase();
-    delete db.vaults[me]; save('vaults'); rbg(['HDEL', 'gondzet:vaults', me]);
+    delete db.vaults[me]; save('vaults');
     send(res, 200, { ok: true });
+  },
+
+  'GET /v1/notifications': async (req, res, url) => {
+    const u = auth(req), after = +url.searchParams.get('after') || 0, th = url.searchParams.get('theme');
+    const l = db.notifs.filter(n => n.id > after && (!n.to || n.to.toLowerCase() === u.name.toLowerCase())
+      && (n.theme == null || String(n.theme) === th)).slice(-50);
+    send(res, 200, { notifications: l });
   },
 
   // administrateur
@@ -521,7 +585,8 @@ function adminDelete(req, res, p) {
     const i = db.messages.findIndex(m => m.id === id);
     if (i < 0) throw new HttpErr(404, 'Introuvable');
     const m = db.messages.splice(i, 1)[0];
-    if (m.image) dropImage(m.image);
+    if (m.image) fs.unlink(path.join(UP, m.image), () => { });
+    if (m.audio) fs.unlink(path.join(UP, m.audio), () => { });
     save('messages');
   } else {
     const i = db.notifs.findIndex(n => n.id === id);
@@ -533,14 +598,13 @@ function adminDelete(req, res, p) {
 
 // ---------------------------------------------------------------- serveur HTTP
 const PAGES = { '/chat': 'chat.html', '/admin': 'admin.html' };
-// CHAT_FRAME_ANCESTORS : sites autorisés à intégrer /chat dans une iframe (ex. ton site Wix). /admin n'est jamais intégrable.
 const FRAME_OK = (process.env.CHAT_FRAME_ANCESTORS || '').split(/[\s,]+/)
-  .map(o => { const m = /^(https:\/\/(\*\.)?[a-z0-9.-]+(:\d+)?)(\/.*)?$/i.exec(o); return m ? m[1] : ''; })   // garde seulement l'origine (tolère un « / » final collé par erreur)
-  .filter(Boolean).join(' ');
-const cspFor = fa => "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors " + fa + "; base-uri 'none'";
-const CSP = cspFor("'none'"), CSP_CHAT = cspFor(FRAME_OK || "'none'");
+  .map(o => { const m = /^(https:\/\/(\*\.)?[a-z0-9.-]+(:\d+)?)(\/.*)?$/i.exec(o); return m ? m[1] : ''; }).filter(Boolean).join(' ');   // origines https seulement (un « / » final est toléré)
+const CSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'";
 
-const server = http.createServer(async (req, res) => {
+const CSP_CHAT = CSP.replace("frame-ancestors 'none'", 'frame-ancestors ' + (FRAME_OK || "'none'"));   // /chat peut être intégré dans ton site ; /admin jamais
+function startServer() {
+http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x'), p = url.pathname;
     if (req.method === 'GET' && (p === '/' || PAGES[p])) {
@@ -549,10 +613,22 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': p === '/chat' ? CSP_CHAT : CSP, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' });
       return res.end(html);
     }
-    if (req.method === 'GET' && /^\/uploads\/[0-9a-f]{32}\.(png|jpg|gif|webp)$/.test(p)) {
+    if (req.method === 'GET' && /^\/uploads\/[0-9a-f]{32}\.(png|jpg|gif|webp|m4a|webm|ogg)$/.test(p)) {
       const f = path.join(UP, path.basename(p));
-      if (!fs.existsSync(f) && !(await rfetchImage(path.basename(p), f))) throw new HttpErr(404, 'Introuvable');
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(f).slice(1)], 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'public, max-age=31536000, immutable', 'Content-Security-Policy': "default-src 'none'" });
+      if (!fs.existsSync(f)) {
+        const b = REMOTE ? await rGet('uploads/' + path.basename(f)).catch(() => null) : null;
+        if (!b) throw new HttpErr(404, 'Introuvable');
+        fs.writeFileSync(f, b);
+      }
+      const size = fs.statSync(f).size, hd = { 'Content-Type': MIME[path.extname(f).slice(1)], 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'public, max-age=31536000, immutable', 'Content-Security-Policy': "default-src 'none'", 'Accept-Ranges': 'bytes' };
+      const rg = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+      if (rg && (rg[1] || rg[2])) {
+        const st = rg[1] ? +rg[1] : Math.max(0, size - +rg[2]), en = rg[1] && rg[2] ? Math.min(+rg[2], size - 1) : size - 1;
+        if (st > en || st >= size) { res.writeHead(416, { 'Content-Range': 'bytes */' + size }); return res.end(); }
+        res.writeHead(206, Object.assign(hd, { 'Content-Range': 'bytes ' + st + '-' + en + '/' + size, 'Content-Length': en - st + 1 }));
+        return fs.createReadStream(f, { start: st, end: en }).pipe(res);
+      }
+      res.writeHead(200, Object.assign(hd, { 'Content-Length': size }));
       return fs.createReadStream(f).pipe(res);
     }
     if (req.method === 'DELETE' && /^\/v1\/admin\/(messages|notifications)\/\d+$/.test(p)) return adminDelete(req, res, p);
@@ -564,5 +640,7 @@ const server = http.createServer(async (req, res) => {
     if (e instanceof HttpErr) send(res, e.code, { error: e.message });
     else { console.error(e); send(res, 500, { error: 'Erreur serveur' }); }
   }
-});
-restore().then(() => server.listen(PORT, () => console.log('G-Ondzet serveur sur le port ' + PORT + (ADMIN_KEY ? '' : '  (ADMIN_KEY absente : /admin désactivée)') + (REMOTE ? '  [sauvegarde distante]' : '  [stockage local seulement]'))));
+}).listen(PORT, () => console.log('G-Ondzet serveur sur le port ' + PORT + (ADMIN_KEY ? '' : '  (ADMIN_KEY absente : /admin désactivée)')));
+}
+// restauration de la sauvegarde durable AVANT de lire les fichiers JSON, puis ecoute
+ghRestore().catch(e => console.error(e)).then(rRestore).finally(() => { initDb(); startServer(); });
