@@ -28,8 +28,10 @@ function initDb() {
   gmsgs: load('gmsgs.json', []),
   steam: load('steam.json', {}),          // v5.25 : pseudo -> [{ id, label, steamId, shared }]
   vaults: load('vaults.json', {}),        // v5.25 : pseudo -> { blob (chiffré par l'appli, illisible ici), ts }          // v5.23 : messages de groupe { id, g, user, text, image, ts }
-  events: load('events.json', []),        // v5.26 : { t: 'download'|'purchase', item, user, ts } (statistiques de la page admin)
-  seq: Object.assign({ msg: 0, notif: 0, dm: 0, grp: 0, gmsg: 0 }, load('seq.json', {}))
+  trials: load('trials.json', {}),        // v5.31 : essais de thèmes -> empreinte appareil -> { thème: début (ms serveur) }
+  purchases: load('purchases.json', []),  // v5.35 : achats (PIN / thème) { id, user, kind, item, theme, tx, status, ts, done } ; status = pending | accepted | refused
+  unlocks: load('unlocks.json', {}),      // v5.35 : pseudo en minuscules -> [indices des thèmes débloqués]
+  seq: Object.assign({ msg: 0, notif: 0, dm: 0, grp: 0, gmsg: 0, purchase: 0 }, load('seq.json', {}))
 });
 }
 const dirty = new Set(); let timer = null;
@@ -126,7 +128,7 @@ async function ghFinal() { try { flush(); ghBusy = false; await ghPush(); } catc
 const R_URL = (process.env.UPSTASH_REDIS_REST_URL || '').replace(/\/+$/, ''), R_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
 const REMOTE = !GH_ON && /^(https:\/\/|http:\/\/localhost[:/])/.test(R_URL + '/') && !!R_TOKEN;
 const RK = 'gondzet:f:', RCHUNK = 700000, rQueue = new Set();
-const JSON_NAMES = ['users', 'sessions', 'messages', 'notifs', 'friends', 'dms', 'groups', 'gmsgs', 'steam', 'vaults', 'events', 'seq'];
+const JSON_NAMES = ['users', 'sessions', 'messages', 'notifs', 'friends', 'dms', 'groups', 'gmsgs', 'steam', 'vaults', 'trials', 'purchases', 'unlocks', 'seq'];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function rcmd(args) {
   const r = await fetch(R_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + R_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(args), signal: AbortSignal.timeout(20000) });
@@ -241,8 +243,10 @@ function auth(req) {
 }
 function admin(req) {
   if (!ADMIN_KEY) throw new HttpErr(503, 'ADMIN_KEY non définie sur le serveur');
-  if (limited('adm|' + ipOf(req), 20, 600e3)) throw new HttpErr(429, 'Trop d\'essais');
-  if (!safeEq(String(req.headers['x-admin-key'] || ''), ADMIN_KEY)) throw new HttpErr(403, 'Clé administrateur incorrecte');
+  // v5.35 : seuls les ECHECS comptent (la page /admin se rafraichit toute seule toutes les 8 s) ; 20 echecs en 10 min = blocage, meme avec la bonne cle
+  const k = 'adm|' + ipOf(req), now = Date.now();
+  if ((hits.get(k) || []).filter(t => now - t < 600e3).length >= 20) throw new HttpErr(429, 'Trop d\'essais');
+  if (!safeEq(String(req.headers['x-admin-key'] || ''), ADMIN_KEY)) { limited(k, 20, 600e3); throw new HttpErr(403, 'Clé administrateur incorrecte'); }
 }
 const pub = u => ({ username: u.name });
 // v5.23 : amis / groupes
@@ -295,6 +299,7 @@ const durOf = v => Math.max(0, Math.min(60000, Math.round(+v || 0)));
 
 // ---------------------------------------------------------------- routes API
 const USER_RE = /^[A-Za-z0-9_.-]{3,20}$/;
+const THEME_NAMES = ['NVIDIA', 'PlayStation 5', 'Xbox', 'Steam', 'PlayStation 4', 'Switch 2'];
 // ---------------------------------------------------------------- v5.25 : mes comptes Steam (liste lisible) + coffre chiffré (illisible par le serveur)
 function steamIdOf(v) {
   v = String(v || '').trim();
@@ -304,40 +309,17 @@ function steamIdOf(v) {
 }
 const cleanLabel = v => typeof v === 'string' ? v.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 40) : '';
 
-// ---------------------------------------------------------------- v5.26 : statistiques et coffre Steam pour /admin
-function adminStats() {
-  const now = Date.now(), D = 864e5, us = Object.values(db.users);
-  const day = ts => new Date(ts).toISOString().slice(0, 10);
-  const act = { d1: new Set(), d7: new Set() };
-  for (const k of Object.keys(db.sessions)) {
-    const s = db.sessions[k], u = String(s.user || '').toLowerCase();
-    if (now - s.ts < D) act.d1.add(u); if (now - s.ts < 7 * D) act.d7.add(u);
-  }
-  const cnt = t => { const e = db.events.filter(x => x.t === t), items = {}, perDay = {};
-    for (const x of e) { items[x.item] = (items[x.item] || 0) + 1; perDay[day(x.ts)] = (perDay[day(x.ts)] || 0) + 1; }
-    const days = []; for (let i = 13; i >= 0; i--) { const d = day(now - i * D); days.push({ d, n: perDay[d] || 0 }); }
-    return { total: e.length, d7: e.filter(x => now - x.ts < 7 * D).length, d30: e.filter(x => now - x.ts < 30 * D).length, days,
-      top: Object.entries(items).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([item, n]) => ({ item, n })) }; };
-  const regDays = {}; for (const u of us) { const d = day(u.created); regDays[d] = (regDays[d] || 0) + 1; }
-  const signups = []; for (let i = 13; i >= 0; i--) { const d = day(now - i * D); signups.push({ d, n: regDays[d] || 0 }); }
-  return {
-    players: { total: us.length, banned: us.filter(u => u.banned).length, new7: us.filter(u => now - u.created < 7 * D).length,
-      new30: us.filter(u => now - u.created < 30 * D).length, active24h: act.d1.size, active7d: act.d7.size, signups },
-    downloads: cnt('download'), purchases: cnt('purchase'),
-    steam: { accounts: Object.values(db.steam).reduce((n, a) => n + a.length, 0), vaults: Object.keys(db.vaults).length }
-  };
-}
-// Coffre Steam : on montre qui a un coffre (date, taille) et les comptes Steam enregistrés. Le contenu du coffre est chiffré par l'appli : jamais exposé.
-function adminSteam() {
-  const names = new Set([...Object.keys(db.steam), ...Object.keys(db.vaults)]);
-  return [...names].filter(k => db.users[k]).map(k => ({
-    username: dn(k),
-    accounts: (db.steam[k] || []).map(a => ({ label: a.label, steamId: a.steamId, shared: !!a.shared })),
-    vault: db.vaults[k] ? { has: true, ts: db.vaults[k].ts, size: db.vaults[k].blob.length } : { has: false }
-  })).sort((a, b) => (b.vault.ts || 0) - (a.vault.ts || 0));
-}
-
 const routes = {
+  // v5.31 : essai gratuit de 7 jours des thèmes payants, lié à l'APPAREIL (survit à l'effacement des données de l'appli)
+  'POST /v1/trials/sync': async (req, res) => {
+    if (limited('trial|' + ipOf(req), 60, 600e3)) throw new HttpErr(429, 'Trop d\'essais');
+    const b = await readJson(req, 2e3), dev = String(b.device || '');
+    if (!/^[0-9a-f]{64}$/.test(dev)) throw new HttpErr(400, 'Appareil invalide');
+    const rec = db.trials[dev] || (db.trials[dev] = {}), now = Date.now();
+    const th = Number.isInteger(b.start) ? b.start : -1;
+    if (th >= 1 && th <= 5 && !rec[th]) { rec[th] = now; save('trials'); }   // le serveur fixe la date : l'horloge du téléphone n'est pas crue
+    send(res, 200, { now, trials: rec });
+  },
   'POST /v1/register': async (req, res) => {
     if (limited('reg|' + ipOf(req), 10, 3600e3)) throw new HttpErr(429, 'Trop de créations de compte, réessaie plus tard');
     const b = await readJson(req, 20e3);
@@ -572,23 +554,45 @@ const routes = {
     send(res, 200, { ok: true });
   },
 
+  // ---- v5.35 : achats (code PIN / thème). Le client envoie sa preuve MoMo ; l'administrateur l'accepte depuis /admin.
+  'POST /v1/purchases': async (req, res) => {
+    const u = auth(req);
+    if (limited('buy|' + u.name.toLowerCase(), 12, 3600e3)) throw new HttpErr(429, 'Trop de demandes, réessaie plus tard');
+    const b = await readJson(req, 5e3);
+    const kind = b.kind === 'pin' ? 'pin' : b.kind === 'theme' ? 'theme' : null;
+    const item = str(b.item, 1, 120), tx = str(b.tx, 4, 60);
+    if (!kind) throw new HttpErr(400, 'Type d\'achat invalide');
+    if (!item) throw new HttpErr(400, 'Article manquant');
+    if (!tx) throw new HttpErr(400, 'Identifiant de transaction manquant');
+    let theme = null;
+    if (kind === 'theme') {
+      theme = Number.isInteger(b.theme) ? b.theme : THEME_NAMES.findIndex(n => n.toLowerCase() === item.toLowerCase());
+      if (!(theme >= 1 && theme <= 5)) throw new HttpErr(400, 'Thème invalide');
+    }
+    const clean = x => x.replace(/[\u0000-\u001f<>]/g, '');
+    const dup = db.purchases.find(p => p.user.toLowerCase() === u.name.toLowerCase() && p.kind === kind && p.item === clean(item) && p.tx.toLowerCase() === clean(tx).toLowerCase() && p.status === 'pending');
+    if (dup) return send(res, 200, { id: dup.id, status: dup.status });
+    const p = { id: ++db.seq.purchase, user: u.name, kind, item: clean(item), theme, tx: clean(tx), status: 'pending', ts: Date.now() };
+    db.purchases.push(p);
+    if (db.purchases.length > 2000) db.purchases.splice(0, db.purchases.length - 2000);
+    save('purchases', 'seq');
+    send(res, 201, { id: p.id, status: p.status });
+  },
+  'GET /v1/purchases/mine': async (req, res) => {   // mes achats + thèmes débloqués (l'appli s'en sert pour restaurer les thèmes après une réinstallation)
+    const u = auth(req), k = u.name.toLowerCase();
+    send(res, 200, {
+      themes: db.unlocks[k] || [],
+      purchases: db.purchases.filter(p => p.user.toLowerCase() === k).slice(-30).map(p => ({ id: p.id, kind: p.kind, item: p.item, status: p.status, ts: p.ts }))
+    });
+  },
+
   'GET /v1/notifications': async (req, res, url) => {
     const u = auth(req), after = +url.searchParams.get('after') || 0, th = url.searchParams.get('theme');
     const l = db.notifs.filter(n => n.id > after && (!n.to || n.to.toLowerCase() === u.name.toLowerCase())
-      && (n.theme == null || String(n.theme) === th)).slice(-50);
+      && (n.theme == null || th == null || String(n.theme) === th)).slice(-50);   // v5.35 : sans ?theme= on renvoie tout (l'appli filtre) ; avant, un message vise sur un theme n'arrivait jamais
     send(res, 200, { notifications: l });
   },
 
-  // ---- v5.26 : statistiques (l'appli signale un téléchargement ou un achat ; compte facultatif)
-  'POST /v1/track': async (req, res) => {
-    if (limited('trk|' + ipOf(req), 60, 3600e3)) throw new HttpErr(429, 'Trop de requêtes');
-    const b = await readJson(req, 2e3);
-    if (b.type !== 'download' && b.type !== 'purchase') throw new HttpErr(400, 'type : download ou purchase');
-    let user = null; try { user = auth(req).name; } catch (e) { }
-    db.events.push({ t: b.type, item: str(b.item, 1, 60) || '?', user, ts: Date.now() });
-    if (db.events.length > 20000) db.events.splice(0, db.events.length - 20000);
-    save('events'); send(res, 200, { ok: true });
-  },
   // administrateur
   'POST /v1/admin/notify': async (req, res) => {
     admin(req);
@@ -608,10 +612,40 @@ const routes = {
   'GET /v1/admin/overview': async (req, res) => {
     admin(req);
     send(res, 200, {
-      stats: adminStats(), steam: adminSteam(),
       users: Object.values(db.users).map(u => ({ username: u.name, created: u.created, banned: !!u.banned })).sort((a, b) => b.created - a.created),
-      notifications: db.notifs.slice(-100).reverse(), messages: db.messages.slice(-100).reverse()
+      notifications: db.notifs.slice(-100).reverse(), messages: db.messages.slice(-100).reverse(),
+      purchases: db.purchases.slice().sort((a, b) => (a.status === 'pending' ? 0 : 1) - (b.status === 'pending' ? 0 : 1) || b.ts - a.ts).slice(0, 100)
     });
+  },
+  // v5.35 : accepter / refuser un achat. PIN accepté = le code part dans une notification (kind « code ») à ce client seulement ;
+  // thème accepté = thème débloqué sur le compte + notification « unlock » que l'appli applique toute seule.
+  'POST /v1/admin/purchase': async (req, res) => {
+    admin(req);
+    const b = await readJson(req, 5e3), p = db.purchases.find(x => x.id === +b.id);
+    if (!p) throw new HttpErr(404, 'Achat introuvable');
+    if (p.status !== 'pending') throw new HttpErr(409, 'Achat déjà traité');
+    const user = db.users[p.user.toLowerCase()];
+    if (!user) throw new HttpErr(404, 'Compte du client introuvable');
+    const push = n => { db.notifs.push(Object.assign({ id: ++db.seq.notif, body: '', code: null, to: user.name, theme: null, ts: Date.now() }, n)); };
+    if (b.action === 'refuse') {
+      p.status = 'refused'; p.done = Date.now();
+      push({ kind: 'promo', title: 'Achat non validé : ' + p.item, body: 'Ton paiement n\'a pas pu être vérifié. Contacte le vendeur avec ton identifiant de transaction : ' + p.tx });
+    } else if (b.action === 'accept') {
+      if (p.kind === 'pin') {
+        const pin = str(b.pin, 1, 200);
+        if (!pin) throw new HttpErr(400, 'Saisis le code PIN à envoyer au client');
+        p.status = 'accepted'; p.done = Date.now();
+        push({ kind: 'code', title: 'Code PIN : ' + p.item, body: 'Ton achat est confirmé. Voici ton code PIN.', code: pin });
+      } else {
+        const k = user.name.toLowerCase(), l = db.unlocks[k] || (db.unlocks[k] = []);
+        if (!l.includes(p.theme)) l.push(p.theme);
+        p.status = 'accepted'; p.done = Date.now();
+        push({ kind: 'unlock', title: 'Thème débloqué : ' + p.item, body: 'Ton achat est confirmé. Le thème est maintenant à toi.', unlockTheme: p.theme });
+        save('unlocks');
+      }
+    } else throw new HttpErr(400, 'Action invalide');
+    save('purchases', 'notifs', 'seq');
+    send(res, 200, { ok: true, status: p.status });
   },
   'POST /v1/admin/ban': async (req, res) => {
     admin(req);
