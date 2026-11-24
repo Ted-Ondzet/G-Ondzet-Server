@@ -28,6 +28,7 @@ function initDb() {
   gmsgs: load('gmsgs.json', []),
   steam: load('steam.json', {}),          // v5.25 : pseudo -> [{ id, label, steamId, shared }]
   vaults: load('vaults.json', {}),        // v5.25 : pseudo -> { blob (chiffré par l'appli, illisible ici), ts }          // v5.23 : messages de groupe { id, g, user, text, image, ts }
+  events: load('events.json', []),        // v5.26 : { t: 'download'|'purchase', item, user, ts } (statistiques de la page admin)
   seq: Object.assign({ msg: 0, notif: 0, dm: 0, grp: 0, gmsg: 0 }, load('seq.json', {}))
 });
 }
@@ -125,7 +126,7 @@ async function ghFinal() { try { flush(); ghBusy = false; await ghPush(); } catc
 const R_URL = (process.env.UPSTASH_REDIS_REST_URL || '').replace(/\/+$/, ''), R_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
 const REMOTE = !GH_ON && /^(https:\/\/|http:\/\/localhost[:/])/.test(R_URL + '/') && !!R_TOKEN;
 const RK = 'gondzet:f:', RCHUNK = 700000, rQueue = new Set();
-const JSON_NAMES = ['users', 'sessions', 'messages', 'notifs', 'friends', 'dms', 'groups', 'gmsgs', 'steam', 'vaults', 'seq'];
+const JSON_NAMES = ['users', 'sessions', 'messages', 'notifs', 'friends', 'dms', 'groups', 'gmsgs', 'steam', 'vaults', 'events', 'seq'];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function rcmd(args) {
   const r = await fetch(R_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + R_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(args), signal: AbortSignal.timeout(20000) });
@@ -302,6 +303,39 @@ function steamIdOf(v) {
   return /^\d{17}$/.test(v) || /^[A-Za-z0-9_-]{2,32}$/.test(v) ? v : null;
 }
 const cleanLabel = v => typeof v === 'string' ? v.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 40) : '';
+
+// ---------------------------------------------------------------- v5.26 : statistiques et coffre Steam pour /admin
+function adminStats() {
+  const now = Date.now(), D = 864e5, us = Object.values(db.users);
+  const day = ts => new Date(ts).toISOString().slice(0, 10);
+  const act = { d1: new Set(), d7: new Set() };
+  for (const k of Object.keys(db.sessions)) {
+    const s = db.sessions[k], u = String(s.user || '').toLowerCase();
+    if (now - s.ts < D) act.d1.add(u); if (now - s.ts < 7 * D) act.d7.add(u);
+  }
+  const cnt = t => { const e = db.events.filter(x => x.t === t), items = {}, perDay = {};
+    for (const x of e) { items[x.item] = (items[x.item] || 0) + 1; perDay[day(x.ts)] = (perDay[day(x.ts)] || 0) + 1; }
+    const days = []; for (let i = 13; i >= 0; i--) { const d = day(now - i * D); days.push({ d, n: perDay[d] || 0 }); }
+    return { total: e.length, d7: e.filter(x => now - x.ts < 7 * D).length, d30: e.filter(x => now - x.ts < 30 * D).length, days,
+      top: Object.entries(items).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([item, n]) => ({ item, n })) }; };
+  const regDays = {}; for (const u of us) { const d = day(u.created); regDays[d] = (regDays[d] || 0) + 1; }
+  const signups = []; for (let i = 13; i >= 0; i--) { const d = day(now - i * D); signups.push({ d, n: regDays[d] || 0 }); }
+  return {
+    players: { total: us.length, banned: us.filter(u => u.banned).length, new7: us.filter(u => now - u.created < 7 * D).length,
+      new30: us.filter(u => now - u.created < 30 * D).length, active24h: act.d1.size, active7d: act.d7.size, signups },
+    downloads: cnt('download'), purchases: cnt('purchase'),
+    steam: { accounts: Object.values(db.steam).reduce((n, a) => n + a.length, 0), vaults: Object.keys(db.vaults).length }
+  };
+}
+// Coffre Steam : on montre qui a un coffre (date, taille) et les comptes Steam enregistrés. Le contenu du coffre est chiffré par l'appli : jamais exposé.
+function adminSteam() {
+  const names = new Set([...Object.keys(db.steam), ...Object.keys(db.vaults)]);
+  return [...names].filter(k => db.users[k]).map(k => ({
+    username: dn(k),
+    accounts: (db.steam[k] || []).map(a => ({ label: a.label, steamId: a.steamId, shared: !!a.shared })),
+    vault: db.vaults[k] ? { has: true, ts: db.vaults[k].ts, size: db.vaults[k].blob.length } : { has: false }
+  })).sort((a, b) => (b.vault.ts || 0) - (a.vault.ts || 0));
+}
 
 const routes = {
   'POST /v1/register': async (req, res) => {
@@ -545,6 +579,16 @@ const routes = {
     send(res, 200, { notifications: l });
   },
 
+  // ---- v5.26 : statistiques (l'appli signale un téléchargement ou un achat ; compte facultatif)
+  'POST /v1/track': async (req, res) => {
+    if (limited('trk|' + ipOf(req), 60, 3600e3)) throw new HttpErr(429, 'Trop de requêtes');
+    const b = await readJson(req, 2e3);
+    if (b.type !== 'download' && b.type !== 'purchase') throw new HttpErr(400, 'type : download ou purchase');
+    let user = null; try { user = auth(req).name; } catch (e) { }
+    db.events.push({ t: b.type, item: str(b.item, 1, 60) || '?', user, ts: Date.now() });
+    if (db.events.length > 20000) db.events.splice(0, db.events.length - 20000);
+    save('events'); send(res, 200, { ok: true });
+  },
   // administrateur
   'POST /v1/admin/notify': async (req, res) => {
     admin(req);
@@ -564,6 +608,7 @@ const routes = {
   'GET /v1/admin/overview': async (req, res) => {
     admin(req);
     send(res, 200, {
+      stats: adminStats(), steam: adminSteam(),
       users: Object.values(db.users).map(u => ({ username: u.name, created: u.created, banned: !!u.banned })).sort((a, b) => b.created - a.created),
       notifications: db.notifs.slice(-100).reverse(), messages: db.messages.slice(-100).reverse()
     });

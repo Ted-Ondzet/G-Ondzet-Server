@@ -55,3 +55,8 @@ Tests : `node test_v524.js`, `node test_durable.js` (avec un faux GitHub), `node
 - **`CHAT_FRAME_ANCESTORS`** : adresses https autorisées à afficher `/chat` dans une iframe (ex. `https://monsite.wix-site-host.com`, un « / » final est toléré). `/admin` n'est jamais intégrable.
 - **Comptes Steam** (jeton `Authorization: Bearer`) : `GET /v1/steam`, `POST /v1/steam` `{accounts:[{id?, label, steamId, shared}]}` (5 max), `GET /v1/steam/friend?username=` (comptes partagés d'un ami), `GET /v1/vault`, `POST /v1/vault` `{blob}` (128 Ko max, déjà chiffré par l'appli), `POST /v1/vault/delete`. Ne mets jamais de mot de passe Steam en clair.
 - Tests : `node test_upstash.js`.
+
+## v5.26 : statistiques et coffre Steam dans /admin
+- **Statistiques** : joueurs inscrits / nouveaux / connectés (24 h, 7 j), téléchargements et achats (total, 7 j, 30 j, courbe 14 jours, top des articles).
+- **Coffre Steam** : liste des comptes Steam enregistrés et des coffres sauvegardés (date, taille). Le contenu des coffres reste chiffré par l'appli et n'est jamais envoyé à l'admin.
+- **`POST /v1/track`** `{type:'download'|'purchase', item}` (jeton facultatif, 60 appels/h/IP) : l'appli l'appelle à chaque téléchargement ou achat pour alimenter les courbes.
