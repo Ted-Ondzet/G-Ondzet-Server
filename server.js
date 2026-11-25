@@ -31,9 +31,13 @@ function initDb() {
   trials: load('trials.json', {}),        // v5.31 : essais de thèmes -> empreinte appareil -> { thème: début (ms serveur) }
   purchases: load('purchases.json', []),  // v5.35 : achats (PIN / thème) { id, user, kind, item, theme, tx, status, ts, done } ; status = pending | accepted | refused
   unlocks: load('unlocks.json', {}),      // v5.35 : pseudo en minuscules -> [indices des thèmes débloqués]
+  gunlocks: load('gunlocks.json', {}),    // v5.36 : pseudo en minuscules -> [noms des jeux débloqués (Compte Jeux)]
   seq: Object.assign({ msg: 0, notif: 0, dm: 0, grp: 0, gmsg: 0, purchase: 0 }, load('seq.json', {}))
 });
 }
+// v5.45 : une erreur imprévue (promesse rejetée, disque, réseau) est journalisée mais ne tue plus le serveur : sur Render, un processus arrêté = erreur 502 pour tous
+process.on('uncaughtException', e => console.error('Erreur non interceptée :', e && e.stack || e));
+process.on('unhandledRejection', e => console.error('Promesse rejetée non interceptée :', e && e.stack || e));
 const dirty = new Set(); let timer = null;
 function save(...names) {
   names.forEach(n => dirty.add(n));
@@ -42,12 +46,14 @@ function save(...names) {
 }
 function flush() {
   timer = null;
-  for (const n of dirty) {
-    const f = path.join(DATA, n + '.json'), tmp = f + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(db[n])); fs.renameSync(tmp, f);
-    ghQueue.add(n + '.json'); rQueue.add(n + '.json');
+  for (const n of Array.from(dirty)) {
+    try {
+      const f = path.join(DATA, n + '.json'), tmp = f + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(db[n])); fs.renameSync(tmp, f);
+      ghQueue.add(n + '.json'); rQueue.add(n + '.json');
+      dirty.delete(n);
+    } catch (e) { console.error('écriture ' + n + '.json impossible :', e.message); timer = timer || setTimeout(flush, 5000); }   // on réessaie dans 5 s, rien n'est perdu
   }
-  dirty.clear();
 }
 process.on('SIGINT', () => { flush(); Promise.all([ghFinal(), rFinal()]).then(() => process.exit(0)); });
 process.on('SIGTERM', () => { flush(); Promise.all([ghFinal(), rFinal()]).then(() => process.exit(0)); });
@@ -128,7 +134,7 @@ async function ghFinal() { try { flush(); ghBusy = false; await ghPush(); } catc
 const R_URL = (process.env.UPSTASH_REDIS_REST_URL || '').replace(/\/+$/, ''), R_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
 const REMOTE = !GH_ON && /^(https:\/\/|http:\/\/localhost[:/])/.test(R_URL + '/') && !!R_TOKEN;
 const RK = 'gondzet:f:', RCHUNK = 700000, rQueue = new Set();
-const JSON_NAMES = ['users', 'sessions', 'messages', 'notifs', 'friends', 'dms', 'groups', 'gmsgs', 'steam', 'vaults', 'trials', 'purchases', 'unlocks', 'seq'];
+const JSON_NAMES = ['users', 'sessions', 'messages', 'notifs', 'friends', 'dms', 'groups', 'gmsgs', 'steam', 'vaults', 'trials', 'purchases', 'unlocks', 'gunlocks', 'seq'];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function rcmd(args) {
   const r = await fetch(R_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + R_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(args), signal: AbortSignal.timeout(20000) });
@@ -162,7 +168,7 @@ async function rLoop() {
     }
   }
 }
-function rPush() { if (REMOTE && rReady) rChain = rChain.then(rLoop); return rChain; }
+function rPush() { if (REMOTE && rReady) rChain = rChain.then(rLoop).catch(e => console.error('Sauvegarde Upstash :', e && e.message)); return rChain; }
 async function rFinal() { if (!REMOTE || !rReady) return; try { flush(); await Promise.race([rPush(), sleep(8000)]); } catch (e) { } }
 async function rRestore() {
   if (!REMOTE) { if (!GH_ON) console.log('Sauvegarde Upstash : désactivée (variables absentes)'); return; }
@@ -248,7 +254,7 @@ function admin(req) {
   if ((hits.get(k) || []).filter(t => now - t < 600e3).length >= 20) throw new HttpErr(429, 'Trop d\'essais');
   if (!safeEq(String(req.headers['x-admin-key'] || ''), ADMIN_KEY)) { limited(k, 20, 600e3); throw new HttpErr(403, 'Clé administrateur incorrecte'); }
 }
-const pub = u => ({ username: u.name });
+const pub = u => ({ username: u.name, avatar: avatarUrl(u) });
 // v5.23 : amis / groupes
 const dn = k => (db.users[k] ? db.users[k].name : k);                                   // pseudo affiché
 const frk = k => db.friends[k] || (db.friends[k] = { f: [], in: [], out: [] });          // fiche d'amis d'un pseudo (minuscules)
@@ -295,10 +301,25 @@ function saveAudio(dataUrl) {
   fs.writeFileSync(path.join(UP, name), buf); ghQueue.add('uploads/' + name); rQueue.add('uploads/' + name);
   return name;
 }
+// v5.44 : photo de profil du compte, en forme REDUITE (bulle ronde, ~128 px, quelques Ko), gardee sur le serveur et renvoyee a chaque connexion
+const AVATAR_MAX = 150 * 1024;   // taille maximale du data URL recu (l'appli envoie ~5-10 Ko)
+function setAvatar(u, dataUrl) {
+  const old = u.avatar || '';
+  if (!dataUrl) u.avatar = '';
+  else {
+    if (typeof dataUrl !== 'string' || dataUrl.length > AVATAR_MAX) throw new HttpErr(413, 'Photo de profil trop lourde');
+    u.avatar = saveImage(dataUrl);
+  }
+  if (old && old !== u.avatar) fs.unlink(path.join(UP, old), () => {});
+  save('users');
+}
+const avatarUrl = u => u.avatar ? '/uploads/' + u.avatar : '';
 const durOf = v => Math.max(0, Math.min(60000, Math.round(+v || 0)));
 
 // ---------------------------------------------------------------- routes API
 const USER_RE = /^[A-Za-z0-9_.-]{3,20}$/;
+// v5.37 : clé de déblocage d'un jeu : « Nom#2 » (compte 2 de ce jeu) ou « Nom » seul (ancien format = tous les comptes du jeu)
+const gameKey = (name, acc) => acc ? name + '#' + acc : name;
 const THEME_NAMES = ['NVIDIA', 'PlayStation 5', 'Xbox', 'Steam', 'PlayStation 4', 'Switch 2'];
 // ---------------------------------------------------------------- v5.25 : mes comptes Steam (liste lisible) + coffre chiffré (illisible par le serveur)
 function steamIdOf(v) {
@@ -322,16 +343,17 @@ const routes = {
   },
   'POST /v1/register': async (req, res) => {
     if (limited('reg|' + ipOf(req), 10, 3600e3)) throw new HttpErr(429, 'Trop de créations de compte, réessaie plus tard');
-    const b = await readJson(req, 20e3);
+    const b = await readJson(req, 200e3);   // v5.44 : la demande peut contenir la photo de profil réduite
     const name = str(b.username, 3, 20), pass = typeof b.password === 'string' ? b.password : '';
     const q = str(b.question, 3, 120), a = str(b.answer, 2, 120);
     if (!name || !USER_RE.test(name)) throw new HttpErr(400, 'Nom d\'utilisateur : 3 à 20 caractères (lettres, chiffres, _ . -)');
     if (pass.length < 6 || pass.length > 200) throw new HttpErr(400, 'Mot de passe : 6 caractères minimum');
     if (!q || !a) throw new HttpErr(400, 'Question et réponse secrètes obligatoires');
     if (db.users[name.toLowerCase()]) throw new HttpErr(409, 'Ce nom d\'utilisateur est déjà pris');
-    db.users[name.toLowerCase()] = { name, pw: hashSecret(pass), question: q, ans: hashSecret(normAnswer(a)), created: Date.now(), banned: false };
+    const rec = db.users[name.toLowerCase()] = { name, pw: hashSecret(pass), question: q, ans: hashSecret(normAnswer(a)), created: Date.now(), banned: false };
+    if (b.avatar) { try { setAvatar(rec, b.avatar); } catch (e) { rec.avatar = ''; } }   // une photo invalide ne bloque pas la création du compte
     save('users');
-    send(res, 201, { token: newSession(name), username: name });
+    send(res, 201, { token: newSession(name), username: name, avatar: avatarUrl(rec) });
   },
   'POST /v1/login': async (req, res) => {
     const b = await readJson(req, 20e3), key = String(b.username || '').toLowerCase();
@@ -340,7 +362,7 @@ const routes = {
     const ok = u && typeof b.password === 'string' && checkSecret(b.password, u.pw);
     if (!ok) throw new HttpErr(401, 'Nom d\'utilisateur ou mot de passe incorrect');
     if (u.banned) throw new HttpErr(403, 'Compte suspendu');
-    send(res, 200, { token: newSession(u.name), username: u.name });
+    send(res, 200, { token: newSession(u.name), username: u.name, avatar: avatarUrl(u) });
   },
   'POST /v1/logout': async (req, res) => {
     const m = /^Bearer ([0-9a-f]{64})$/.exec(req.headers.authorization || '');
@@ -348,6 +370,14 @@ const routes = {
     send(res, 200, { ok: true });
   },
   'GET /v1/me': async (req, res) => send(res, 200, pub(auth(req))),
+  // v5.44 : changer / retirer la photo de profil (image = data URL JPEG/PNG réduit ; image absente ou vide = retirer)
+  'POST /v1/me/avatar': async (req, res) => {
+    const u = auth(req);
+    if (limited('av|' + u.name.toLowerCase(), 30, 3600e3)) throw new HttpErr(429, 'Trop de changements de photo, réessaie plus tard');
+    const b = await readJson(req, 200e3);
+    setAvatar(u, b.image || '');
+    send(res, 200, { avatar: avatarUrl(u) });
+  },
   // mot de passe oublié : 1) la question  2) la réponse + nouveau mot de passe
   'POST /v1/recover/question': async (req, res) => {
     if (limited('rq|' + ipOf(req), 20, 3600e3)) throw new HttpErr(429, 'Trop d\'essais');
@@ -363,7 +393,7 @@ const routes = {
     u.pw = hashSecret(np);
     for (const k of Object.keys(db.sessions)) if (db.sessions[k].user.toLowerCase() === key) delete db.sessions[k];
     save('users', 'sessions');
-    send(res, 200, { token: newSession(u.name), username: u.name });
+    send(res, 200, { token: newSession(u.name), username: u.name, avatar: avatarUrl(u) });
   },
 
   // chat
@@ -558,21 +588,31 @@ const routes = {
   'POST /v1/purchases': async (req, res) => {
     const u = auth(req);
     if (limited('buy|' + u.name.toLowerCase(), 12, 3600e3)) throw new HttpErr(429, 'Trop de demandes, réessaie plus tard');
-    const b = await readJson(req, 5e3);
-    const kind = b.kind === 'pin' ? 'pin' : b.kind === 'theme' ? 'theme' : null;
-    const item = str(b.item, 1, 120), tx = str(b.tx, 4, 60);
+    const b = await readJson(req, 5 * 1024 * 1024);   // v5.39 : la demande peut contenir la photo de la transaction (data URL JPEG/PNG, 3 Mo max une fois décodée)
+    const kind = b.kind === 'game' ? 'game' : b.kind === 'pin' ? 'pin' : b.kind === 'theme' ? 'theme' : null;   // v5.36 : « game » = bouton Obtenir (plus de PIN) ; « pin » gardé seulement pour les anciennes versions de l'appli
+    const item = str(b.item, 1, 120), txIn = str(b.tx, 4, 60);
     if (!kind) throw new HttpErr(400, 'Type d\'achat invalide');
     if (!item) throw new HttpErr(400, 'Article manquant');
-    if (!tx) throw new HttpErr(400, 'Identifiant de transaction manquant');
+    // v5.39 : preuve = photo de la transaction (prise ou importée). L'identifiant écrit reste accepté pour les anciennes versions de l'appli.
+    if (!b.image && !txIn) throw new HttpErr(400, 'Photo de la transaction manquante');
     let theme = null;
     if (kind === 'theme') {
       theme = Number.isInteger(b.theme) ? b.theme : THEME_NAMES.findIndex(n => n.toLowerCase() === item.toLowerCase());
       if (!(theme >= 1 && theme <= 5)) throw new HttpErr(400, 'Thème invalide');
     }
     const clean = x => x.replace(/[\u0000-\u001f<>]/g, '');
-    const dup = db.purchases.find(p => p.user.toLowerCase() === u.name.toLowerCase() && p.kind === kind && p.item === clean(item) && p.tx.toLowerCase() === clean(tx).toLowerCase() && p.status === 'pending');
+    // v5.37 : un jeu peut avoir plusieurs comptes dans le coffre (« Compte 1 », « Compte 2 »...) : acc = numéro du compte (1-99), comme sur le site Coffre Steam
+    const acc = kind === 'game' && Number.isInteger(b.acc) && b.acc >= 1 && b.acc <= 99 ? b.acc : null;
+    if (kind === 'game') {   // jeu (ou compte du jeu) déjà débloqué : rien à faire
+      const have = db.gunlocks[u.name.toLowerCase()] || [], key = gameKey(clean(item), acc).toLowerCase();
+      if (have.some(g => g.toLowerCase() === key || g.toLowerCase() === clean(item).toLowerCase())) return send(res, 200, { status: 'accepted', already: true });
+    }
+    const tx = txIn ? clean(txIn) : '';
+    const dup = !b.image && db.purchases.find(p => p.user.toLowerCase() === u.name.toLowerCase() && p.kind === kind && p.item === clean(item) && (p.acc || null) === acc && (p.tx || '').toLowerCase() === tx.toLowerCase() && p.status === 'pending');
     if (dup) return send(res, 200, { id: dup.id, status: dup.status });
-    const p = { id: ++db.seq.purchase, user: u.name, kind, item: clean(item), theme, tx: clean(tx), status: 'pending', ts: Date.now() };
+    const image = b.image ? saveImage(b.image) : null;   // v5.39 : photo enregistrée comme les images du chat (/uploads/...), affichée dans /admin
+    const note = typeof b.note === 'string' ? clean(b.note).slice(0, 200) : '';
+    const p = { id: ++db.seq.purchase, user: u.name, kind, item: clean(item), acc, theme, tx, image, note, status: 'pending', ts: Date.now() };
     db.purchases.push(p);
     if (db.purchases.length > 2000) db.purchases.splice(0, db.purchases.length - 2000);
     save('purchases', 'seq');
@@ -582,7 +622,8 @@ const routes = {
     const u = auth(req), k = u.name.toLowerCase();
     send(res, 200, {
       themes: db.unlocks[k] || [],
-      purchases: db.purchases.filter(p => p.user.toLowerCase() === k).slice(-30).map(p => ({ id: p.id, kind: p.kind, item: p.item, status: p.status, ts: p.ts }))
+      games: db.gunlocks[k] || [],   // v5.36 : jeux débloqués (l'appli les restaure après réinstallation)
+      purchases: db.purchases.filter(p => p.user.toLowerCase() === k).slice(-30).map(p => ({ id: p.id, kind: p.kind, item: p.item, acc: p.acc || null, status: p.status, ts: p.ts }))
     });
   },
 
@@ -629,9 +670,16 @@ const routes = {
     const push = n => { db.notifs.push(Object.assign({ id: ++db.seq.notif, body: '', code: null, to: user.name, theme: null, ts: Date.now() }, n)); };
     if (b.action === 'refuse') {
       p.status = 'refused'; p.done = Date.now();
-      push({ kind: 'promo', title: 'Achat non validé : ' + p.item, body: 'Ton paiement n\'a pas pu être vérifié. Contacte le vendeur avec ton identifiant de transaction : ' + p.tx });
+      push({ kind: 'promo', title: 'Achat non validé : ' + p.item + (p.acc ? ' — Compte ' + p.acc : ''), body: 'Ton paiement n\'a pas pu être vérifié. Contacte le vendeur avec la preuve de ta transaction' + (p.tx ? ' (identifiant : ' + p.tx + ')' : '') + '.' });
     } else if (b.action === 'accept') {
-      if (p.kind === 'pin') {
+      if (p.kind === 'game') {   // v5.36 : jeu accepté = débloqué sur le compte + notification « unlock » que l'appli applique toute seule (aucun PIN)
+        const k = user.name.toLowerCase(), l = db.gunlocks[k] || (db.gunlocks[k] = []), key = gameKey(p.item, p.acc);
+        if (!l.some(g => g.toLowerCase() === key.toLowerCase())) l.push(key);
+        p.status = 'accepted'; p.done = Date.now();
+        const lab = p.item + (p.acc ? ' — Compte ' + p.acc : '');
+        push({ kind: 'unlock', title: 'Jeu débloqué : ' + lab, body: 'Ton achat est confirmé. Le jeu est maintenant débloqué : va dans Compte Jeux et touche « Ajouter ».', unlockGame: p.item, unlockAcc: p.acc || null });
+        save('gunlocks');
+      } else if (p.kind === 'pin') {
         const pin = str(b.pin, 1, 200);
         if (!pin) throw new HttpErr(400, 'Saisis le code PIN à envoyer au client');
         p.status = 'accepted'; p.done = Date.now();
@@ -682,10 +730,17 @@ const FRAME_OK = (process.env.CHAT_FRAME_ANCESTORS || '').split(/[\s,]+/)
 const CSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'";
 
 const CSP_CHAT = CSP.replace("frame-ancestors 'none'", 'frame-ancestors ' + (FRAME_OK || "'none'"));   // /chat peut être intégré dans ton site ; /admin jamais
+let isReady = false, ready = Promise.resolve();   // v5.45 : vrai quand la sauvegarde durable est restaurée et la base chargée
 function startServer() {
-http.createServer(async (req, res) => {
+const srv = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x'), p = url.pathname;
+    if (p === '/healthz') return send(res, 200, { ok: true, ready: isReady });   // v5.45 : pour la « Health Check Path » de Render et pour réveiller le service
+    if (!isReady && !PAGES[p] && p !== '/') {
+      // v5.45 : le serveur écoute dès le démarrage ; pendant la restauration (quelques dizaines de secondes sur Render gratuit) les demandes ATTENDENT au lieu de recevoir une erreur 502
+      await Promise.race([ready, sleep(50000)]);
+      if (!isReady) throw new HttpErr(503, 'Le serveur démarre, réessaie dans quelques secondes');
+    }
     if (req.method === 'GET' && (p === '/' || PAGES[p])) {
       if (p === '/') { res.writeHead(302, { Location: '/chat' }); return res.end(); }
       const html = fs.readFileSync(path.join(__dirname, 'public', PAGES[p]));
@@ -719,7 +774,12 @@ http.createServer(async (req, res) => {
     if (e instanceof HttpErr) send(res, e.code, { error: e.message });
     else { console.error(e); send(res, 500, { error: 'Erreur serveur' }); }
   }
-}).listen(PORT, () => console.log('G-Ondzet serveur sur le port ' + PORT + (ADMIN_KEY ? '' : '  (ADMIN_KEY absente : /admin désactivée)')));
+});
+// v5.45 : le proxy de Render garde les connexions ouvertes plus longtemps que les 5 s par défaut de Node ; sans cela il réutilise une connexion déjà fermée -> erreur 502 au hasard
+srv.keepAliveTimeout = 120e3; srv.headersTimeout = 125e3; srv.requestTimeout = 120e3;
+srv.on('clientError', (e, sock) => { try { sock.end('HTTP/1.1 400 Bad Request\r\n\r\n'); } catch (x) { } });
+srv.listen(PORT, () => console.log('G-Ondzet serveur sur le port ' + PORT + (ADMIN_KEY ? '' : '  (ADMIN_KEY absente : /admin désactivée)')));
 }
 // restauration de la sauvegarde durable AVANT de lire les fichiers JSON, puis ecoute
-ghRestore().catch(e => console.error(e)).then(rRestore).finally(() => { initDb(); startServer(); });
+startServer();   // v5.45 : écoute tout de suite (plus de 502 pendant la restauration)
+ready = ghRestore().catch(e => console.error(e)).then(rRestore).catch(e => console.error(e)).then(() => { initDb(); isReady = true; }).catch(e => { console.error('Démarrage :', e); });

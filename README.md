@@ -55,3 +55,14 @@ Tests : `node test_v524.js`, `node test_durable.js` (avec un faux GitHub), `node
 - **`CHAT_FRAME_ANCESTORS`** : adresses https autorisées à afficher `/chat` dans une iframe (ex. `https://monsite.wix-site-host.com`, un « / » final est toléré). `/admin` n'est jamais intégrable.
 - **Comptes Steam** (jeton `Authorization: Bearer`) : `GET /v1/steam`, `POST /v1/steam` `{accounts:[{id?, label, steamId, shared}]}` (5 max), `GET /v1/steam/friend?username=` (comptes partagés d'un ami), `GET /v1/vault`, `POST /v1/vault` `{blob}` (128 Ko max, déjà chiffré par l'appli), `POST /v1/vault/delete`. Ne mets jamais de mot de passe Steam en clair.
 - Tests : `node test_upstash.js`.
+
+## Photo de profil (v5.44)
+La photo du compte est gardée sur le serveur en forme réduite (carré 128 px, ~5-10 Ko) : `POST /v1/register` accepte `avatar` (data URL),
+`POST /v1/me/avatar` `{ image }` la change (image vide = retirer), et `register` / `login` / `GET /v1/me` renvoient `avatar` (adresse `/uploads/...`).
+Test : `node test_avatar.js`.
+
+## Erreur 502 (v5.45)
+- Le serveur écoute **dès le démarrage** (avant, il n'écoutait qu'après la restauration de la sauvegarde : Render renvoyait 502 pendant ce temps). Les demandes attendent la fin de la restauration (50 s max, sinon 503 « Le serveur démarre »).
+- `keepAliveTimeout` 120 s : le proxy de Render ne tombe plus sur une connexion déjà fermée (cause classique de 502 au hasard).
+- Une erreur imprévue est journalisée mais ne tue plus le processus.
+- `GET /healthz` répond `{ok, ready}` : mets `/healthz` dans **Settings > Health Check Path** sur Render, et un ping toutes les 5-10 min (UptimeRobot, gratuit) évite l'endormissement du service gratuit.
