@@ -1,99 +1,553 @@
 <!doctype html>
-<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <title>G-Ondzet · Administration</title>
 <style>
-:root{--bg:#0b0f08;--row:#151c10;--acc:#76b900;--txt:#fff;--sub:#9aa394}
-@media (prefers-color-scheme:light){:root{--bg:#f3f5f0;--row:#fff;--txt:#10150c;--sub:#5d6656}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.4 system-ui,sans-serif;padding:16px;max-width:900px;margin:auto}
-h1{font-size:20px}h1 span{color:var(--acc)}h2{font-size:16px;margin:22px 0 8px;color:var(--acc)}
-input,select,textarea{font:inherit;width:100%;padding:10px 12px;margin:4px 0;border-radius:10px;border:1px solid #76b90055;background:var(--row);color:var(--txt)}
-button{font:inherit;cursor:pointer;border:0;border-radius:18px;padding:8px 16px;font-weight:700;background:var(--acc);color:#000}
-button.s{padding:4px 10px;font-size:12px;background:#ff5555;color:#fff}button.g{background:transparent;color:var(--txt);border:1px solid #76b90088}
-.row{display:flex;gap:8px}.row>*{flex:1}.item{background:var(--row);border-radius:12px;padding:10px 12px;margin:6px 0;display:flex;gap:10px;align-items:center}
-.item div{flex:1;min-width:0;word-break:break-word}.sub{color:var(--sub);font-size:12px}#msg{font-weight:700;min-height:1.4em}.ok{color:var(--acc)}.bad{color:#ff6b6b}
-.item img{height:40px;border-radius:6px}
-.item img.proof{display:block;width:96px;height:96px;object-fit:cover;border-radius:10px;border:2px solid var(--acc);cursor:zoom-in;flex:none;background:var(--row)}
-#zoom{position:fixed;inset:0;background:#000d;display:none;align-items:center;justify-content:center;z-index:9;padding:12px;cursor:zoom-out}#zoom img{max-width:100%;max-height:100%;border-radius:8px}
-.buy{flex-wrap:wrap}.buy.pend{border:2px solid var(--acc)}.buy input{width:140px;margin:0}.buy .acts{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-button.ok{background:var(--acc);color:#000;padding:6px 14px}button.no{background:#ff5555;color:#fff;padding:6px 14px}.tag{display:inline-block;border-radius:8px;padding:1px 8px;font-size:12px;font-weight:700;background:#76b90033}.tag.r{background:#ff555533}code{background:#76b90022;padding:1px 6px;border-radius:6px}
+:root{--bg:#0a0e08;--bg2:#0e140b;--sf:#121a0e;--sf2:#18230f;--line:#25351a;--acc:#76b900;--acc2:#a6ff1a;--accfg:#071003;--txt:#edf3e6;--sub:#8fa083;--bad:#ff6161;--warn:#e6c84a;--info:#5cc8ff;--shadow:0 8px 28px rgba(0,0,0,.35)}
+@media (prefers-color-scheme:light){:root{--bg:#f1f4ed;--bg2:#e9eee3;--sf:#fff;--sf2:#f5f8f1;--line:#dbe4d1;--acc:#4f8a00;--acc2:#3f7000;--accfg:#fff;--txt:#10160c;--sub:#5b6a50;--bad:#c62828;--warn:#9a7400;--info:#0a74a8;--shadow:0 8px 24px rgba(20,40,10,.10)}}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
+body{margin:0;background:radial-gradient(900px 420px at 90% -10%,rgba(118,185,0,.12),transparent 60%),var(--bg);color:var(--txt);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh}
+[hidden]{display:none!important}
+h1,h2,h3,p{margin:0}
+button,input,select,textarea{font:inherit;color:inherit}
+input,select,textarea{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg2);outline:none;min-width:0}
+input:focus,select:focus,textarea:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(118,185,0,.18)}
+textarea{resize:vertical;min-height:84px}
+label{display:block;font-size:12px;font-weight:700;color:var(--sub);margin:0 0 5px;letter-spacing:.03em;text-transform:uppercase}
+.btn{cursor:pointer;border:1px solid transparent;border-radius:10px;padding:9px 16px;font-weight:700;background:var(--acc);color:var(--accfg);transition:.15s;white-space:nowrap}
+.btn:hover{filter:brightness(1.08)}.btn:active{transform:translateY(1px)}.btn:disabled{opacity:.55;cursor:wait}
+.btn.ghost{background:transparent;color:var(--txt);border-color:var(--line)}.btn.ghost:hover{border-color:var(--acc);filter:none}
+.btn.danger{background:transparent;color:var(--bad);border-color:rgba(255,97,97,.45)}.btn.danger:hover{background:rgba(255,97,97,.1);filter:none}
+.btn.sm{padding:5px 11px;font-size:12px;border-radius:8px}
+.lnk{cursor:pointer;background:none;border:0;padding:0;color:var(--sub);font-size:12px;text-decoration:underline}.lnk.danger{color:var(--bad)}
+.tag{display:inline-block;border-radius:99px;padding:2px 9px;font-size:11px;font-weight:800;border:1px solid var(--line);color:var(--sub);white-space:nowrap}
+.tag.ok{color:var(--acc2);border-color:var(--acc)}.tag.warn{color:var(--warn);border-color:var(--warn)}.tag.bad{color:var(--bad);border-color:var(--bad)}.tag.info{color:var(--info);border-color:var(--info)}
+.sub{color:var(--sub);font-size:12px}.grow{flex:1;min-width:0}.t{font-weight:700;word-break:break-word}
+.card{background:var(--sf);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+.ch{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap}.ch h3{font-size:15px}
+.actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}.grid2>.card{margin:0}
+.fgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.fld{margin-bottom:12px}
+.ptitle{font-size:22px;font-weight:800;margin-bottom:4px}.psub{color:var(--sub);font-size:13px;margin-bottom:16px}
+.empty{padding:26px 10px;text-align:center;color:var(--sub);font-size:13px}
+.toolbar{display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap}.toolbar input[type=search]{flex:1;min-width:180px}
+.seg{display:inline-flex;background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:3px;gap:2px;flex-wrap:wrap}
+.seg button{cursor:pointer;border:0;background:transparent;color:var(--sub);padding:7px 13px;border-radius:9px;font-weight:700;font-size:13px}
+.seg button.on{background:var(--acc);color:var(--accfg)}
+.chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--sub);text-transform:none;letter-spacing:0;font-weight:600;margin:0;cursor:pointer}.chk input{width:18px;height:18px;accent-color:var(--acc)}
+.note{background:rgba(118,185,0,.08);border:1px solid rgba(118,185,0,.35);border-radius:12px;padding:10px 12px;font-size:13px;color:var(--sub)}
+.note.warn{background:rgba(230,200,74,.08);border-color:rgba(230,200,74,.4)}
+
+/* en-tete + navigation */
+.top{position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 18px;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.inapp .top{padding-right:112px}
+.brand{display:flex;align-items:center;gap:11px}.logo{width:36px;height:36px;border-radius:10px;background:var(--acc);color:var(--accfg);display:grid;place-items:center;font-weight:900;font-size:19px}
+.brand b{display:block;font-size:16px;line-height:1.1}.brand small{color:var(--sub);font-size:12px}
+.top-r{display:flex;align-items:center;gap:10px}
+.live{font-size:12px;font-weight:700;color:var(--sub);display:flex;align-items:center;gap:6px}.live i{width:8px;height:8px;border-radius:50%;background:var(--sub);display:inline-block}.live.on i{background:var(--acc);box-shadow:0 0 8px var(--acc)}.live.off i{background:var(--bad)}
+.shell{display:grid;grid-template-columns:230px minmax(0,1fr);gap:22px;max-width:1220px;margin:0 auto;padding:18px}
+#nav{position:sticky;top:76px;align-self:start;display:flex;flex-direction:column;gap:4px}
+#nav button{display:flex;align-items:center;gap:11px;width:100%;text-align:left;cursor:pointer;border:1px solid transparent;background:transparent;color:var(--sub);padding:10px 12px;border-radius:12px;font-weight:700}
+#nav button:hover{background:var(--sf);color:var(--txt)}#nav button.on{background:var(--sf);color:var(--txt);border-color:var(--line);box-shadow:inset 3px 0 0 var(--acc)}
+#nav .ic{width:22px;text-align:center;font-size:17px}#nav .lb{flex:1}
+#nav .bd{background:var(--acc);color:var(--accfg);border-radius:99px;min-width:20px;padding:0 6px;font-size:11px;font-weight:900;text-align:center;line-height:20px}
+.sep{height:1px;background:var(--line);margin:8px 6px}
+@media (max-width:860px){
+ .shell{grid-template-columns:1fr;gap:0;padding:0 12px 24px}
+ #nav{position:sticky;top:57px;z-index:15;flex-direction:row;overflow-x:auto;gap:6px;padding:10px 0;margin:0 -12px 6px;padding-left:12px;padding-right:12px;background:var(--bg);border-bottom:1px solid var(--line);-webkit-overflow-scrolling:touch;scrollbar-width:none}
+ #nav::-webkit-scrollbar{display:none}
+ #nav button{flex:0 0 auto;width:auto;padding:8px 12px;box-shadow:none!important;border-color:var(--line)}#nav button.on{background:var(--acc);color:var(--accfg);border-color:var(--acc)}#nav button.on .bd{background:var(--accfg);color:var(--acc)}
+ #nav .sep{display:none}.grid2,.fgrid{grid-template-columns:1fr}.top{padding:8px 12px}.live span{display:none}
+}
+
+/* tableau de bord */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(138px,1fr));gap:12px;margin-bottom:14px}
+.stat{background:var(--sf);border:1px solid var(--line);border-radius:16px;padding:14px;cursor:pointer;text-align:left;color:inherit}
+.stat:hover{border-color:var(--acc)}.stat .n{font-size:28px;font-weight:900;line-height:1.1}.stat .l{color:var(--sub);font-size:12px;margin-top:3px}.stat.hot{border-color:var(--acc);box-shadow:0 0 0 3px rgba(118,185,0,.15)}.stat.hot .n{color:var(--acc2)}
+.li{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)}.li:first-child{border-top:0;padding-top:0}.li:last-child{padding-bottom:0}
+.av{width:36px;height:36px;border-radius:50%;background:var(--sf2);border:1px solid var(--line);display:grid;place-items:center;font-weight:800;color:var(--acc2);flex:none}
+.ico{width:38px;height:38px;border-radius:11px;background:var(--sf2);border:1px solid var(--line);display:grid;place-items:center;font-size:18px;flex:none}
+
+/* achats */
+.buy{background:var(--sf);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px}
+.buy.pending{border-color:var(--acc);box-shadow:0 0 0 3px rgba(118,185,0,.12)}
+.buy-h{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.buy-b{display:flex;gap:12px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.proof{width:88px;height:88px;object-fit:cover;border-radius:12px;border:2px solid var(--acc);cursor:zoom-in;background:var(--sf2)}
+.buy-a{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-left:auto}.buy-a input{width:170px}
+#zoom{position:fixed;inset:0;background:rgba(0,0,0,.86);display:none;align-items:center;justify-content:center;z-index:60;padding:14px;cursor:zoom-out}#zoom img{max-width:100%;max-height:100%;border-radius:10px}
+
+/* liste deroulante de jeux (recherche en haut de la liste) */
+.combo{position:relative}
+.combo-btn{width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;cursor:pointer;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg2)}
+.combo-btn:after{content:"▾";color:var(--sub)}.combo-btn.ph{color:var(--sub)}.combo-btn.open{border-color:var(--acc)}
+.combo-pop{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:30;background:var(--sf);border:1px solid var(--acc);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
+.combo-q{padding:10px;border-bottom:1px solid var(--line);background:var(--sf2)}
+.combo-meta{padding:6px 12px;font-size:11px;color:var(--sub);border-bottom:1px solid var(--line)}
+.combo-list{max-height:min(320px,50vh);overflow-y:auto;-webkit-overflow-scrolling:touch}
+.opt{display:flex;align-items:center;gap:8px;width:100%;text-align:left;cursor:pointer;border:0;background:transparent;padding:10px 12px;border-bottom:1px solid var(--line)}.opt:hover,.opt.sel{background:rgba(118,185,0,.14)}.opt .nm{flex:1;min-width:0;word-break:break-word}
+
+/* coffre */
+.vcard{background:var(--sf);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px}
+.vh{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.vh .t{font-size:16px;color:var(--acc2)}
+.vacc{border-top:1px solid var(--line);margin-top:10px;padding-top:8px}.vacc-h{display:flex;justify-content:space-between;align-items:center}.accn{font-size:12px;font-weight:800;color:var(--acc)}
+.f{display:flex;align-items:center;gap:8px;padding:4px 0}.f .k{flex:0 0 96px;font-size:11px;color:var(--sub);text-transform:uppercase;letter-spacing:.04em}.f .v{flex:1;min-width:0;word-break:break-all;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px}
+details.fold{padding:0}details.fold>summary{cursor:pointer;padding:13px 16px;font-weight:700;list-style:none}details.fold>summary::-webkit-details-marker{display:none}details.fold>summary:before{content:"▸ ";color:var(--acc)}details[open].fold>summary:before{content:"▾ "}.fold .in{padding:0 16px 16px}
+.vstats{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+
+/* telechargements */
+.dls{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.dl{background:var(--sf);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:10px}.dl.ok{border-color:var(--acc)}
+.dl .big{font-size:30px;font-weight:900}.dl .pf{display:flex;align-items:center;gap:10px;font-weight:800;font-size:16px}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;word-break:break-all;color:var(--sub)}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:6px 8px;border-top:1px solid var(--line);vertical-align:top}th{color:var(--sub);font-size:11px;text-transform:uppercase}
+
+/* connexion + toast */
+.login{min-height:100vh;display:grid;place-items:center;padding:20px}
+.lcard{width:100%;max-width:380px;background:var(--sf);border:1px solid var(--line);border-radius:20px;padding:26px;box-shadow:var(--shadow)}
+.lcard .logo{width:52px;height:52px;font-size:28px;border-radius:14px;margin-bottom:14px}.lcard h1{font-size:22px;margin-bottom:4px}.lcard p{color:var(--sub);font-size:13px;margin-bottom:16px}
+#lerr{color:var(--bad);font-size:13px;min-height:18px;margin-top:10px}
+.toast{position:fixed;left:50%;bottom:22px;transform:translate(-50%,20px);z-index:80;max-width:min(92vw,520px);padding:12px 18px;border-radius:12px;font-weight:700;font-size:14px;background:var(--sf);border:1px solid var(--line);box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:.2s}
+.toast.show{opacity:1;transform:translate(-50%,0)}.toast.ok{border-color:var(--acc);color:var(--acc2)}.toast.bad{border-color:var(--bad);color:var(--bad)}
 </style></head><body>
-<h1>G-Ondzet <span>· Administration</span></h1>
+
 <div id="zoom"><img alt=""></div>
-<div id="login"><input id="key" type="password" placeholder="Clé administrateur"><button id="go">Entrer</button></div>
-<div id="app" style="display:none">
-<div id="msg"></div>
-<h2>🛒 Achats des clients <span id="pcount" class="sub"></span></h2><div id="buys"></div>
-<h2>Envoyer une notification</h2>
-<select id="kind"><option value="promo">📣 Message promo</option><option value="code">🎁 Code de jeu</option></select>
-<input id="title" placeholder="Titre (80 max)" maxlength="80">
-<textarea id="body" rows="3" placeholder="Message (600 max)" maxlength="600"></textarea>
-<input id="code" placeholder="Code du jeu (ex. XXXXX-XXXXX-XXXXX)" style="display:none">
-<div class="row">
-<input id="to" placeholder="Pseudo précis (vide = tout le monde)">
-<select id="theme"><option value="">Tous les thèmes</option><option value="0">Thème NVIDIA</option><option value="1">Thème PlayStation 5</option><option value="2">Thème Xbox</option><option value="3">Thème Steam</option><option value="4">Thème PlayStation 4</option><option value="5">Thème Switch 2</option></select></div>
-<button id="send" style="margin-top:6px">Envoyer</button>
-<div class="sub">Un code envoyé à « tout le monde » sera visible par tous les comptes : pour un code unique, indique un pseudo.</div>
-<h2>Notifications envoyées</h2><div id="notifs"></div>
-<h2>Comptes</h2><div id="users"></div>
-<h2>Derniers messages du chat</h2><div id="msgs"></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<div id="login" class="login">
+ <form class="lcard" id="lform" autocomplete="off">
+  <div class="logo">G</div>
+  <h1>Administration</h1><p>G-Ondzet · espace réservé. Entre ta clé administrateur.</p>
+  <label for="key">Clé administrateur</label>
+  <input id="key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <div class="actions"><button class="btn" id="go" type="submit" style="width:100%">Entrer</button></div>
+  <div id="lerr"></div>
+ </form>
+</div>
+
+<div id="app" hidden>
+ <header class="top">
+  <div class="brand"><div class="logo">G</div><div><b>G-Ondzet</b><small>Administration</small></div></div>
+  <div class="top-r"><div class="live" id="live"><i></i><span id="livet">Connexion…</span></div><button class="btn ghost sm" id="logout" type="button">Déconnexion</button></div>
+ </header>
+ <div class="shell">
+  <nav id="nav" aria-label="Sections"></nav>
+  <main>
+
+   <section id="s-dash" hidden>
+    <h2 class="ptitle">Tableau de bord</h2><p class="psub">Vue d’ensemble de G-Ondzet.</p>
+    <div class="stats" id="stats"></div>
+    <div class="grid2">
+     <div class="card"><div class="ch"><h3>À traiter</h3><button class="btn ghost sm" data-go="buys" type="button">Voir les achats</button></div><div id="dpend"></div></div>
+     <div class="card"><div class="ch"><h3>Application</h3><button class="btn ghost sm" data-go="dl" type="button">Détails</button></div><div id="ddl"><div class="empty">Chargement…</div></div></div>
+    </div>
+   </section>
+
+   <section id="s-buys" hidden>
+    <h2 class="ptitle">Achats des clients</h2><p class="psub">« Accepter » débloque le jeu ou le thème et prévient le client immédiatement.</p>
+    <div class="toolbar"><div class="seg" id="bfilter"></div><input id="bq" type="search" placeholder="Rechercher un client ou un article…"></div>
+    <div id="buys"></div>
+   </section>
+
+   <section id="s-notify" hidden>
+    <h2 class="ptitle">Notifications</h2><p class="psub">Envoie un message ou offre un jeu à un client.</p>
+    <div class="card">
+     <div class="ch"><h3>Nouvelle notification</h3>
+      <div class="seg" id="nkind"><button type="button" data-k="promo" class="on">📣 Message</button><button type="button" data-k="game">🎁 Code de jeu</button></div></div>
+
+     <div id="f-promo">
+      <div class="fld"><label for="title">Titre</label><input id="title" maxlength="80" placeholder="Ex. Nouveau thème disponible"></div>
+      <div class="fld"><label for="body">Message</label><textarea id="body" rows="3" maxlength="600" placeholder="Ton message (600 caractères max)"></textarea></div>
+      <div class="fgrid">
+       <div class="fld"><label for="to">Destinataire</label><input id="to" list="ulist" placeholder="Pseudo précis (vide = tout le monde)" autocomplete="off"></div>
+       <div class="fld"><label for="theme">Thème concerné</label><select id="theme"><option value="">Tous les thèmes</option><option value="0">Thème NVIDIA</option><option value="1">Thème PlayStation 5</option><option value="2">Thème Xbox</option><option value="3">Thème Steam</option><option value="4">Thème PlayStation 4</option><option value="5">Thème Switch 2</option></select></div>
+      </div>
+     </div>
+
+     <div id="f-game" hidden>
+      <div class="fld"><label>Jeu à envoyer</label>
+       <div class="combo" id="gcombo">
+        <button type="button" class="combo-btn ph" id="gbtn">Choisir un jeu…</button>
+        <div class="combo-pop" id="gpop" hidden>
+         <div class="combo-q"><input type="search" id="gq" placeholder="Rechercher un jeu…" autocomplete="off"></div>
+         <div class="combo-meta" id="gmeta"></div>
+         <div class="combo-list" id="glist" role="listbox"></div>
+        </div>
+       </div>
+      </div>
+      <div class="fgrid">
+       <div class="fld"><label for="gto">Client qui reçoit le jeu</label><input id="gto" list="ulist" placeholder="Pseudo du client" autocomplete="off"></div>
+       <div class="fld" id="gaccw" hidden><label for="gacc">Compte</label><select id="gacc"></select></div>
+      </div>
+      <div class="fld"><label for="gnote">Message (facultatif)</label><input id="gnote" maxlength="300" placeholder="Ex. Merci pour ta confiance !"></div>
+      <div class="note" id="gempty" hidden>La liste des jeux est vide. Ouvre le <b>Coffre Steam</b> et déverrouille-le une fois : la liste est alors chargée ici automatiquement. <button class="btn ghost sm" type="button" data-go="vault" style="margin-left:6px">Ouvrir le coffre</button></div>
+      <div class="note" id="ginfo">Le client reçoit le jeu <b>immédiatement</b> : il apparaît débloqué dans son appli et une notification le prévient.</div>
+     </div>
+
+     <div class="actions"><button class="btn" id="send" type="button">Envoyer</button></div>
+    </div>
+    <datalist id="ulist"></datalist>
+    <div class="card"><div class="ch"><h3>Notifications envoyées</h3><span class="sub" id="ncount"></span></div><div id="notifs"></div></div>
+   </section>
+
+   <section id="s-users" hidden>
+    <h2 class="ptitle">Comptes</h2><p class="psub" id="usub"></p>
+    <div class="toolbar"><input id="uq" type="search" placeholder="Rechercher un pseudo…"></div>
+    <div class="card" id="users"></div>
+   </section>
+
+   <section id="s-chat" hidden>
+    <h2 class="ptitle">Chat</h2><p class="psub">Derniers messages : supprime ceux qui posent problème.</p>
+    <div class="toolbar"><input id="cq" type="search" placeholder="Rechercher un auteur ou un mot…"></div>
+    <div class="card" id="msgs"></div>
+   </section>
+
+   <section id="s-vault" hidden>
+    <h2 class="ptitle">Coffre Steam</h2><p class="psub">Comptes de jeux chiffrés. La phrase secrète reste dans ton navigateur : elle n’est jamais envoyée au serveur.</p>
+    <div id="v-lock">
+     <div class="card" id="v-unlock">
+      <div class="fld"><label for="vpass">Phrase secrète du coffre</label><input id="vpass" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+      <div class="actions" style="margin-top:0"><button class="btn" id="vunlock" type="button">Déverrouiller</button></div>
+      <div id="vmsg" class="sub" style="margin-top:10px;min-height:18px"></div>
+     </div>
+     <div class="card" id="v-none" hidden>
+      <div class="note warn">Aucun coffre n’est enregistré sur le serveur.</div>
+      <div class="actions"><button class="btn" id="vfromsite" type="button">Importer depuis le site</button></div>
+      <div class="fld" style="margin-top:14px"><label for="vpaste">Ou colle le code chiffré</label><textarea id="vpaste" placeholder='{"v":1,"s":"…","i":"…","c":"…"}'></textarea></div>
+      <div class="actions" style="margin-top:0"><button class="btn ghost" id="vimport" type="button">Importer ce code</button></div>
+     </div>
+    </div>
+    <div id="v-open" hidden>
+     <div class="vstats"><span class="tag ok" id="vst1"></span><span class="tag" id="vst2"></span><span class="tag" id="vsave">Prêt</span><span class="grow"></span><button class="btn ghost sm" id="vlock" type="button">🔒 Verrouiller</button></div>
+     <div class="toolbar"><input id="vq" type="search" placeholder="Rechercher un jeu ou un compte…"><label class="chk"><input type="checkbox" id="vgfn" checked> Masquer « non dispo GeForce NOW »</label></div>
+     <details class="card fold"><summary>➕ Ajouter ou modifier un compte</summary><div class="in">
+      <div class="fgrid"><div class="fld"><label for="ag">Jeu</label><input id="ag" placeholder="Nom du jeu"></div><div class="fld"><label for="au">Identifiant</label><input id="au" autocomplete="off" autocapitalize="off"></div>
+      <div class="fld"><label for="ap">Mot de passe</label><input id="ap" autocomplete="off"></div><div class="fld"><label for="apin">Code PIN (facultatif)</label><input id="apin" autocomplete="off"></div></div>
+      <div class="actions" style="margin-top:0"><button class="btn" id="aadd" type="button">Enregistrer le compte</button></div>
+      <div class="sub" id="aerr" style="margin-top:8px">Si le jeu et l’identifiant existent déjà, le compte est mis à jour.</div></div></details>
+     <details class="card fold"><summary>📥 Importer ou remplacer toute la liste</summary><div class="in">
+      <div class="fld"><label for="rfile">Fichier .txt</label><input id="rfile" type="file" accept=".txt,text/plain"></div>
+      <div class="fld"><label for="rraw">Lignes</label><textarea id="rraw" placeholder='"Nom du jeu", "compte", "motdepasse",'></textarea></div>
+      <div class="actions" style="margin-top:0"><button class="btn ghost" id="radd" type="button">Ajouter ces lignes</button><button class="btn danger" id="rrep" type="button">Remplacer toute la liste</button></div>
+      <div class="sub" id="rerr" style="margin-top:8px"></div></div></details>
+     <details class="card fold"><summary>🔁 Synchronisation et sauvegardes</summary><div class="in">
+      <div class="note">Chaque modification est enregistrée (chiffrée) sur le serveur. Pour que la page publique <b>comptes.html</b> du site soit aussi à jour, copie le code chiffré ci-dessous et colle-le dans le site.</div>
+      <div class="fld" style="margin-top:12px"><textarea id="vblob" readonly></textarea></div>
+      <div class="actions" style="margin-top:0"><button class="btn ghost" id="vcopy" type="button">Copier le code chiffré</button><button class="btn ghost" id="vundo" type="button">Annuler la dernière sauvegarde</button><button class="btn danger" id="vresite" type="button">Recharger depuis le site</button></div></div></details>
+     <div id="vlist"></div>
+    </div>
+   </section>
+
+   <section id="s-dl" hidden>
+    <h2 class="ptitle">Téléchargements</h2><p class="psub">Versions publiées de l’application, lues sur ton site (versions.json).</p>
+    <div class="toolbar"><a class="btn ghost sm" id="dlsite" target="_blank" rel="noopener" style="text-decoration:none">Ouvrir la page de téléchargement du site ↗</a><button class="btn ghost sm" id="dlref" type="button">Actualiser</button><span class="sub" id="dlts"></span></div>
+    <div id="dlbox"><div class="empty">Chargement…</div></div>
+   </section>
+
+  </main>
+ </div>
 </div>
 <script>
-const $=id=>document.getElementById(id);let key=sessionStorage.gkey||'';
-const say=(t,ok)=>{$('msg').textContent=t;$('msg').className=ok?'ok':'bad'};
-async function api(m,p,b){const r=await fetch(p,{method:m,headers:{'Content-Type':'application/json','x-admin-key':key},body:b?JSON.stringify(b):undefined});
-  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Erreur');return j}
-$('kind').onchange=()=>$('code').style.display=$('kind').value==='code'?'block':'none';
-$('go').onclick=()=>{key=$('key').value;load()};
+'use strict';
+/* ====== outils ====== */
+const $=id=>document.getElementById(id);
+let key=sessionStorage.gkey||'';
+if(/; wv\)/.test(navigator.userAgent))document.documentElement.classList.add('inapp');   // appli Android : place pour les boutons ⚙ ⟳
 const T=['NVIDIA','PS5','Xbox','Steam','PS4','Switch 2'];
-const el=(tag,txt,cls)=>{const e=document.createElement(tag);if(txt!=null)e.textContent=txt;if(cls)e.className=cls;return e};
-function item(main,sub,btn,img){const d=el('div'),w=el('div');w.append(el('div',main));if(sub)w.append(el('div',sub,'sub'));
-  if(img){const i=el('img');i.src=img;d.append(i)}d.append(w);if(btn)d.append(btn);d.className='item';return d}
+const SECTIONS=[['dash','📊','Tableau de bord'],['buys','🛒','Achats'],['notify','📣','Notifications'],['users','👥','Comptes'],['chat','💬','Chat'],['vault','🔐','Coffre Steam'],['dl','⬇️','Téléchargements']];
+const S={ov:null,cat:{games:[],ts:0},dl:null,buyF:'pending',seen:null};
+let cur='dash',tt=0;
+function h(tag,a,...kids){const e=document.createElement(tag);if(a)for(const k in a){const v=a[k];if(v==null||v===false)continue;
+  if(k==='class')e.className=v;else if(k==='text')e.textContent=v;else if(k.startsWith('on'))e[k]=v;else if(k==='style')e.style.cssText=v;else e.setAttribute(k,v===true?'':v)}
+  for(const c of kids.flat()){if(c==null||c===false)continue;e.append(c.nodeType?c:document.createTextNode(String(c)))}return e}
+const norm=s=>String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+const fmt=ts=>new Date(ts).toLocaleString('fr-FR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+const fmtD=d=>{if(!d)return'';const x=new Date(d);return isNaN(x)?String(d):x.toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'})};
+function ago(ts){const s=Math.max(0,(Date.now()-ts)/1000|0);if(s<60)return'à l’instant';if(s<3600)return'il y a '+(s/60|0)+' min';if(s<86400)return'il y a '+(s/3600|0)+' h';return'il y a '+(s/86400|0)+' j'}
+function toast(t,ok){const e=$('toast');e.textContent=t;e.className='toast show '+(ok?'ok':'bad');clearTimeout(tt);tt=setTimeout(()=>{e.className='toast'},5000)}
+async function api(m,p,b){const r=await fetch(p,{method:m,cache:'no-store',headers:{'Content-Type':'application/json','x-admin-key':key},body:b?JSON.stringify(b):undefined});
+  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Erreur '+r.status);return j}
+function copy(text,btn){
+  const done=()=>{toast('Copié ✓',true);if(btn){const o=btn.textContent;btn.textContent='Copié ✓';setTimeout(()=>{btn.textContent=o},1200)}};
+  const fb=()=>{const t=document.createElement('textarea');t.value=text;document.body.appendChild(t);t.select();try{document.execCommand('copy');done()}catch(e){toast('Copie impossible',false)}document.body.removeChild(t)};
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(text).then(done,fb);else fb()}
+const safeUrl=u=>typeof u==='string'&&/^https?:\/\//i.test(u)?u:null;
+const reload=()=>load(true);
+
+/* ====== navigation ====== */
+function buildNav(){const n=$('nav');SECTIONS.forEach(([k,i,l])=>{if(k==='vault')n.append(h('div',{class:'sep'}));
+  n.append(h('button',{type:'button',id:'n-'+k,onclick:()=>go(k)},h('span',{class:'ic'},i),h('span',{class:'lb'},l),h('span',{class:'bd',id:'b-'+k,hidden:true})))})}
+function go(id){cur=id;sessionStorage.gsec=id;SECTIONS.forEach(([k])=>{$('s-'+k).hidden=k!==id;$('n-'+k).classList.toggle('on',k===id)});window.scrollTo(0,0);const nb=$('n-'+id),nv=$('nav');if(nv.scrollWidth>nv.clientWidth)nv.scrollTo({left:Math.max(0,nb.offsetLeft-12),behavior:'smooth'});
+  if(id==='vault')vaultEnter();if(id==='dl')loadDownloads();if(id==='notify')renderGames()}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-go]');if(b)go(b.dataset.go)});
+function setBadge(k,n){const b=$('b-'+k);b.hidden=!n;b.textContent=n}
+function setLive(ok){$('live').className='live '+(ok?'on':'off');$('livet').textContent=ok?'En ligne':'Hors ligne'}
+
+/* ====== connexion / chargement ====== */
+$('lform').onsubmit=e=>{e.preventDefault();key=$('key').value;load()};
+$('logout').onclick=()=>{delete sessionStorage.gkey;key='';$('key').value='';vLock();$('app').hidden=true;$('login').hidden=false};
 async function load(silent){
-  try{const j=await api('GET','/v1/admin/overview');sessionStorage.gkey=key;$('login').style.display='none';$('app').style.display='block';
-    renderBuys(j.purchases||[]);
-    const N=$('notifs');N.textContent='';j.notifications.forEach(n=>{const b=el('button','Supprimer','s');b.onclick=()=>del('/v1/admin/notifications/'+n.id);
-      N.append(item((n.kind==='code'?'🎁 ':'📣 ')+n.title+(n.code?'  →  '+n.code:''),new Date(n.ts).toLocaleString()+' · '+(n.to?'pour '+n.to:'tous')+' · '+(n.theme==null?'tous thèmes':'thème '+T[n.theme]),b))});
-    const U=$('users');U.textContent='';j.users.forEach(u=>{const b=el('button',u.banned?'Réactiver':'Suspendre',u.banned?'g':'s');
-      b.onclick=()=>api('POST','/v1/admin/ban',{username:u.username,banned:!u.banned}).then(load).catch(e=>say(e.message));
-      U.append(item(u.username+(u.banned?'  (suspendu)':''),'créé le '+new Date(u.created).toLocaleDateString(),b))});
-    const M=$('msgs');M.textContent='';j.messages.forEach(m=>{const b=el('button','Supprimer','s');b.onclick=()=>del('/v1/admin/messages/'+m.id);
-      M.append(item(m.user+' : '+(m.text||'(image)'),new Date(m.ts).toLocaleString(),b,m.image?'/uploads/'+m.image:null))});
-  }catch(e){if(silent===true)return;delete sessionStorage.gkey;$('login').style.display='block';$('app').style.display='none';if(key)alert(e.message)}}
-const del=p=>api('DELETE',p).then(load).catch(e=>say(e.message));
-/* v5.35 : achats des clients (jeu / theme). « Accepter » debloque le jeu ou le theme pour ce client ; « Refuser » le previent. (Ancien PIN : saisie du code seulement pour les anciens achats de type PIN.) */
-let seenBuy=null;
+  try{
+    const j=await api('GET','/v1/admin/overview'),first=$('app').hidden;
+    sessionStorage.gkey=key;S.ov=j;setLive(true);
+    if(first){$('login').hidden=true;$('app').hidden=false;$('lerr').textContent='';if(!$('nav').children.length)buildNav();go(SECTIONS.some(s=>s[0]===sessionStorage.gsec)?sessionStorage.gsec:'dash');loadCatalog();loadDownloads(true)}
+    renderAll();
+  }catch(e){
+    if(silent===true){setLive(false);return}
+    delete sessionStorage.gkey;$('app').hidden=true;$('login').hidden=false;$('lerr').textContent=key?e.message:''}}
+function renderAll(){renderNav();renderStats();renderDashPending();renderBuys();renderNotifs();renderUsers();renderChat();fillUsers()}
+
+/* ====== tableau de bord ====== */
+function pendingList(){return(S.ov.purchases||[]).filter(p=>p.status==='pending')}
+function renderNav(){const n=pendingList().length;setBadge('buys',n);document.title=(n?'('+n+') ':'')+'G-Ondzet · Administration'}
+function renderStats(){
+  const o=S.ov,P=o.purchases||[],pend=pendingList().length,box=$('stats');box.textContent='';
+  [['buys',pend,'Achats en attente',pend>0],['buys',P.filter(p=>p.status==='accepted').length,'Achats acceptés'],['users',(o.users||[]).length,'Comptes clients'],
+   ['notify',(o.notifications||[]).length,'Notifications envoyées'],['chat',(o.messages||[]).length,'Messages récents'],['vault',S.cat.games.length,'Jeux au catalogue']]
+  .forEach(([go,n,l,hot])=>box.append(h('button',{type:'button',class:'stat'+(hot?' hot':''),'data-go':go},h('div',{class:'n'},n),h('div',{class:'l'},l))))}
+function renderDashPending(){
+  const box=$('dpend');box.textContent='';const L=pendingList().slice(0,5);
+  if(!L.length){box.append(h('div',{class:'empty'},'Rien à traiter pour le moment ✓'));return}
+  L.forEach(p=>box.append(h('div',{class:'li'},h('div',{class:'ico'},p.kind==='game'?'🎮':p.kind==='pin'?'🔑':'🎨'),
+    h('div',{class:'grow'},h('div',{class:'t'},p.item+(p.acc?' — Compte '+p.acc:'')),h('div',{class:'sub'},p.user+' · '+ago(p.ts))),h('button',{class:'btn sm',type:'button','data-go':'buys'},'Traiter'))))}
+function renderDdl(){
+  const box=$('ddl');box.textContent='';const d=S.dl;
+  if(!d){box.append(h('div',{class:'empty'},'Chargement…'));return}
+  const app=d.apps[0];if(!app){box.append(h('div',{class:'empty'},'Aucune version publiée'));return}
+  const pl=app.platforms||{};
+  ['android','ios','windows'].forEach(k=>{const p=pl[k]||{},cur=(p.versions||[]).find(v=>v.version===p.latest),ok=!!(cur&&safeUrl(cur.url)),pf=PF[k];
+    box.append(h('div',{class:'li'},h('div',{class:'ico'},pf[0]),h('div',{class:'grow'},h('div',{class:'t'},pf[1]),h('div',{class:'sub'},p.latest?'Version '+p.latest:'Aucune version')),
+      h('span',{class:'tag '+(ok?'ok':p.latest?'warn':'')},ok?'Disponible':p.latest?'Lien à venir':'Bientôt')))})}
+
+/* ====== achats ====== */
 function beep(){try{const c=new(window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.value=880;g.gain.setValueAtTime(.2,c.currentTime);g.gain.exponentialRampToValueAtTime(.001,c.currentTime+.6);o.start();o.stop(c.currentTime+.6)}catch(e){}}
-function renderBuys(L){
-  const B=$('buys');B.textContent='';const pend=L.filter(p=>p.status==='pending');
-  $('pcount').textContent=pend.length?'· '+pend.length+' en attente':'';
-  document.title=(pend.length?'('+pend.length+') ':'')+'G-Ondzet · Administration';
-  const ids=pend.map(p=>p.id);
-  if(seenBuy!==null&&ids.some(i=>!seenBuy.includes(i)))beep();
-  seenBuy=ids;
-  if(!L.length){B.append(el('div','Aucun achat pour le moment.','sub'));return}
-  L.forEach(p=>{
-    const d=el('div',null,'item buy'+(p.status==='pending'?' pend':'')),w=el('div');
-    /* v5.39 : photo de la transaction envoyee par le client (clic = plein ecran) */
-    if(p.image){const im=el('img',null,'proof');im.src='/uploads/'+p.image;im.alt='Preuve de paiement';im.title='Agrandir';im.onclick=()=>{$('zoom').querySelector('img').src=im.src;$('zoom').style.display='flex'};d.append(im)}
-    w.append(el('div',(p.kind==='game'?'🎮 Jeu : ':p.kind==='pin'?'🔑 Code PIN : ':'🎨 Thème : ')+p.item+(p.acc?' — Compte '+p.acc:'')));
-    w.append(el('div','Client : '+p.user+(p.tx?' · ID transaction : '+p.tx:'')+(p.image?'':(p.tx?'':' · (aucune preuve)')),'sub'));
-    if(p.image)w.append(el('div','📷 Photo de la transaction jointe — touche l\'image pour l\'agrandir','sub'));
-    w.append(el('div',new Date(p.ts).toLocaleString(),'sub'));d.append(w);
-    if(p.status==='pending'){
-      const a=el('div',null,'acts');let pin=null;
-      if(p.kind==='pin'){pin=el('input');pin.placeholder='Code PIN à envoyer';pin.maxLength=200;a.append(pin)}
-      const ok=el('button','Accepter','ok'),no=el('button','Refuser','no');
-      ok.onclick=()=>{if(pin&&!pin.value.trim()){say('Saisis le code PIN à envoyer à '+p.user);pin.focus();return}
-        api('POST','/v1/admin/purchase',{id:p.id,action:'accept',pin:pin?pin.value:undefined}).then(()=>{say('Achat accepté ✓ : '+p.user+' est prévenu',true);load()}).catch(e=>say(e.message))};
-      no.onclick=()=>{if(confirm('Refuser cet achat ?'))api('POST','/v1/admin/purchase',{id:p.id,action:'refuse'}).then(()=>{say('Achat refusé',true);load()}).catch(e=>say(e.message))};
-      a.append(ok,no);d.append(a);
-    }else d.append(el('span',p.status==='accepted'?'Accepté ✓':'Refusé',p.status==='accepted'?'tag':'tag r'));
-    B.append(d);
-  });
-}
+function renderBuys(){
+  const P=S.ov.purchases||[],pend=P.filter(p=>p.status==='pending'),ids=pend.map(p=>p.id);
+  if(S.seen!==null&&ids.some(i=>!S.seen.includes(i)))beep();S.seen=ids;
+  const cnt={pending:pend.length,accepted:P.filter(p=>p.status==='accepted').length,refused:P.filter(p=>p.status==='refused').length,all:P.length};
+  const seg=$('bfilter');seg.textContent='';
+  [['pending','En attente'],['accepted','Acceptés'],['refused','Refusés'],['all','Tous']].forEach(([k,l])=>seg.append(h('button',{type:'button',class:S.buyF===k?'on':'',onclick:()=>{S.buyF=k;renderBuys()}},l+' ('+cnt[k]+')')));
+  const q=norm($('bq').value),B=$('buys');B.textContent='';
+  const L=P.filter(p=>(S.buyF==='all'||p.status===S.buyF)&&(!q||norm(p.user+' '+p.item+' '+(p.tx||'')).includes(q)));
+  if(!L.length){B.append(h('div',{class:'card'},h('div',{class:'empty'},S.buyF==='pending'&&!q?'Aucun achat en attente ✓':'Aucun achat ne correspond')));return}
+  L.forEach(p=>B.append(buyCard(p)))}
+function buyCard(p){
+  const st={pending:['warn','En attente'],accepted:['ok','Accepté'],refused:['bad','Refusé']}[p.status]||['','?'];
+  const card=h('div',{class:'buy '+p.status}),lbl=p.kind==='game'?'Jeu':p.kind==='pin'?'Code PIN':'Thème';
+  card.append(h('div',{class:'buy-h'},h('div',{class:'ico'},p.kind==='game'?'🎮':p.kind==='pin'?'🔑':'🎨'),
+    h('div',{class:'grow'},h('div',{class:'t'},p.item+(p.acc?' — Compte '+p.acc:'')),h('div',{class:'sub'},lbl+' · '+p.user+' · '+fmt(p.ts)+' ('+ago(p.ts)+')')),h('span',{class:'tag '+st[0]},st[1])));
+  const body=h('div',{class:'buy-b'});
+  if(p.image){const im=h('img',{class:'proof',alt:'Preuve de paiement',title:'Agrandir',src:'/uploads/'+p.image});im.onclick=()=>{$('zoom').querySelector('img').src=im.src;$('zoom').style.display='flex'};body.append(im)}
+  const info=h('div',{class:'grow'});
+  if(p.tx)info.append(h('div',null,'ID transaction : ',h('b',null,p.tx)));
+  if(p.image)info.append(h('div',{class:'sub'},'📷 Photo de la transaction jointe — touche l’image pour l’agrandir'));
+  if(!p.tx&&!p.image)info.append(h('div',{class:'sub'},'Aucune preuve jointe'));
+  body.append(info);
+  if(p.status==='pending'){
+    const a=h('div',{class:'buy-a'});let pin=null;
+    if(p.kind==='pin'){pin=h('input',{placeholder:'Code PIN à envoyer',maxlength:200});a.append(pin)}
+    a.append(h('button',{class:'btn',type:'button',onclick:()=>{if(pin&&!pin.value.trim()){toast('Saisis le code PIN à envoyer à '+p.user,false);pin.focus();return}
+        api('POST','/v1/admin/purchase',{id:p.id,action:'accept',pin:pin?pin.value:undefined}).then(()=>{toast('Achat accepté ✓ : '+p.user+' est prévenu',true);reload()}).catch(e=>toast(e.message,false))}},'Accepter'),
+      h('button',{class:'btn danger',type:'button',onclick:()=>{if(confirm('Refuser cet achat ?'))api('POST','/v1/admin/purchase',{id:p.id,action:'refuse'}).then(()=>{toast('Achat refusé',true);reload()}).catch(e=>toast(e.message,false))}},'Refuser'));
+    body.append(a)}
+  card.append(body);return card}
 $('zoom').onclick=()=>{$('zoom').style.display='none'};
-setInterval(()=>{if(key&&$('app').style.display!=='none'&&!document.activeElement.matches('input,textarea,select'))load(true)},8000);
-$('send').onclick=()=>api('POST','/v1/admin/notify',{kind:$('kind').value,title:$('title').value,body:$('body').value,code:$('code').value,to:$('to').value,theme:$('theme').value})
-  .then(()=>{say('Notification envoyée ✓',true);['title','body','code','to'].forEach(i=>$(i).value='');load()}).catch(e=>say(e.message));
+$('bq').oninput=()=>S.ov&&renderBuys();
+
+/* ====== notifications ====== */
+let nmode='promo';
+function setMode(k){nmode=k;[...$('nkind').children].forEach(b=>b.classList.toggle('on',b.dataset.k===k));$('f-promo').hidden=k!=='promo';$('f-game').hidden=k!=='game';if(k==='game')renderGames()}
+$('nkind').onclick=e=>{const b=e.target.closest('button');if(b)setMode(b.dataset.k)};
+function fillUsers(){const d=$('ulist');d.textContent='';(S.ov.users||[]).forEach(u=>d.append(h('option',{value:u.username})))}
+function renderNotifs(){
+  const N=$('notifs'),L=S.ov.notifications||[];N.textContent='';$('ncount').textContent=L.length?L.length+' au total':'';
+  if(!L.length){N.append(h('div',{class:'empty'},'Aucune notification envoyée'));return}
+  L.forEach(n=>{const ic=n.kind==='unlock'?'🔓':n.kind==='code'?'🔑':'📣';
+    N.append(h('div',{class:'li'},h('div',{class:'ico'},ic),
+      h('div',{class:'grow'},h('div',{class:'t'},n.title+(n.code?'  →  '+n.code:'')),h('div',{class:'sub'},fmt(n.ts)+' · '+(n.to?'pour '+n.to:'tout le monde')+' · '+(n.theme==null?'tous les thèmes':'thème '+T[n.theme]))),
+      h('button',{class:'btn danger sm',type:'button',onclick:()=>{api('DELETE','/v1/admin/notifications/'+n.id).then(reload).catch(e=>toast(e.message,false))}},'Supprimer')))})}
+/* liste deroulante des jeux avec barre de recherche en haut */
+const G={sel:null,open:false};
+function gOpen(v){G.open=v;$('gpop').hidden=!v;$('gbtn').classList.toggle('open',v);if(v){$('gq').value='';renderGames();setTimeout(()=>$('gq').focus(),30)}}
+function selectGame(x){G.sel=x;const b=$('gbtn');b.textContent=x?x.g:'Choisir un jeu…';b.classList.toggle('ph',!x);
+  const w=$('gaccw'),s=$('gacc');s.textContent='';if(x&&x.n>1){s.append(h('option',{value:''},'Tous les comptes'));for(let i=1;i<=x.n;i++)s.append(h('option',{value:i},'Compte '+i));w.hidden=false}else w.hidden=true}
+function renderGames(){
+  const L=S.cat.games,q=norm($('gq').value),box=$('glist'),m=q?L.filter(x=>norm(x.g).includes(q)):L;
+  $('gempty').hidden=L.length>0;$('ginfo').hidden=L.length===0;box.textContent='';
+  $('gmeta').textContent=L.length?(q?m.length+' résultat'+(m.length>1?'s':'')+' sur '+L.length:L.length+' jeux'):'Aucun jeu dans la liste';
+  m.slice(0,300).forEach(x=>box.append(h('button',{type:'button',class:'opt'+(G.sel&&G.sel.g===x.g?' sel':''),onclick:()=>{selectGame(x);gOpen(false)}},
+    h('span',{class:'nm'},x.g),x.n>1?h('span',{class:'tag'},x.n+' comptes'):null,x.f==='yes'?h('span',{class:'tag ok'},'GeForce NOW'):x.f==='no'?h('span',{class:'tag bad'},'Non dispo'):null)));
+  if(m.length>300)box.append(h('div',{class:'empty'},'Affine ta recherche pour voir les '+(m.length-300)+' autres jeux…'));
+  if(!m.length&&L.length)box.append(h('div',{class:'empty'},'Aucun jeu ne correspond'))}
+$('gbtn').onclick=()=>gOpen(!G.open);
+$('gq').oninput=renderGames;
+document.addEventListener('click',e=>{if(G.open&&!$('gcombo').contains(e.target))gOpen(false)});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){gOpen(false);$('zoom').style.display='none'}});
+async function loadCatalog(){try{S.cat=await api('GET','/v1/admin/catalog');renderGames();if(S.ov)renderStats()}catch(e){}}
+$('send').onclick=async()=>{
+  const btn=$('send');btn.disabled=true;
+  try{
+    if(nmode==='promo'){
+      await api('POST','/v1/admin/notify',{kind:'promo',title:$('title').value,body:$('body').value,to:$('to').value,theme:$('theme').value});
+      toast('Notification envoyée ✓',true);['title','body','to'].forEach(i=>$(i).value='');
+    }else{
+      if(!G.sel)throw new Error('Choisis un jeu dans la liste');
+      const to=$('gto').value.trim();if(!to)throw new Error('Indique le pseudo du client');
+      await api('POST','/v1/admin/notify',{kind:'game',game:G.sel.g,acc:$('gacc').value?+$('gacc').value:null,to,body:$('gnote').value});
+      toast('Jeu envoyé ✓ : '+to+' l’a immédiatement',true);selectGame(null);$('gnote').value='';
+    }
+    reload();
+  }catch(e){toast(e.message,false)}
+  btn.disabled=false};
+
+/* ====== comptes ====== */
+function renderUsers(){
+  const U=$('users'),L=S.ov.users||[],q=norm($('uq').value),m=L.filter(u=>!q||norm(u.username).includes(q));U.textContent='';
+  $('usub').textContent=L.length+' compte'+(L.length>1?'s':'')+' · '+L.filter(u=>u.banned).length+' suspendu(s)';
+  if(!m.length){U.append(h('div',{class:'empty'},'Aucun compte'));return}
+  m.forEach(u=>U.append(h('div',{class:'li'},h('div',{class:'av'},(u.username||'?').charAt(0).toUpperCase()),
+    h('div',{class:'grow'},h('div',{class:'t'},u.username),h('div',{class:'sub'},'Inscrit le '+new Date(u.created).toLocaleDateString('fr-FR'))),
+    u.banned?h('span',{class:'tag bad'},'Suspendu'):null,
+    h('button',{class:'btn ghost sm',type:'button',onclick:()=>{setMode('promo');$('to').value=u.username;go('notify');$('title').focus()}},'Message'),
+    h('button',{class:'btn sm '+(u.banned?'ghost':'danger'),type:'button',onclick:()=>{api('POST','/v1/admin/ban',{username:u.username,banned:!u.banned}).then(reload).catch(e=>toast(e.message,false))}},u.banned?'Réactiver':'Suspendre'))))}
+$('uq').oninput=()=>S.ov&&renderUsers();
+
+/* ====== chat ====== */
+function renderChat(){
+  const M=$('msgs'),L=S.ov.messages||[],q=norm($('cq').value),m=L.filter(x=>!q||norm(x.user+' '+(x.text||'')).includes(q));M.textContent='';
+  if(!m.length){M.append(h('div',{class:'empty'},'Aucun message'));return}
+  m.forEach(x=>{const im=x.image?h('img',{class:'proof',style:'width:56px;height:56px;border-width:1px',alt:'',src:'/uploads/'+x.image,onclick:ev=>{$('zoom').querySelector('img').src=ev.target.src;$('zoom').style.display='flex'}}):null;
+    M.append(h('div',{class:'li'},h('div',{class:'av'},(x.user||'?').charAt(0).toUpperCase()),
+      h('div',{class:'grow'},h('div',{class:'t'},x.user),h('div',null,x.text||(x.audio?'🎤 Message vocal':x.image?'':'')),x.audio?h('audio',{controls:true,preload:'none',src:'/uploads/'+x.audio,style:'max-width:100%;margin-top:4px'}):null,h('div',{class:'sub'},fmt(x.ts))),
+      im,h('button',{class:'btn danger sm',type:'button',onclick:()=>{if(confirm('Supprimer ce message ?'))api('DELETE','/v1/admin/messages/'+x.id).then(reload).catch(e=>toast(e.message,false))}},'Supprimer')))})}
+$('cq').oninput=()=>S.ov&&renderChat();
+
+/* ====== telechargements (versions.json du site) ====== */
+const PF={android:['🤖','Android'],ios:['🍎','iOS'],windows:['🪟','Windows']};
+async function loadDownloads(quiet){
+  try{S.dl=await api('GET','/v1/admin/downloads');renderDl();renderDdl()}
+  catch(e){S.dl=null;if(!quiet){$('dlbox').textContent='';$('dlbox').append(h('div',{class:'note warn'},'Impossible de lire les infos de téléchargement : '+e.message))}
+    $('ddl').textContent='';$('ddl').append(h('div',{class:'empty'},'Indisponible'))}}
+function renderDl(){
+  const box=$('dlbox'),d=S.dl;box.textContent='';if(!d)return;
+  $('dlsite').href=d.site+'/#telecharger';$('dlts').textContent='Données du site · '+ago(d.ts);
+  if(!d.apps.length){box.append(h('div',{class:'empty'},'Aucune application dans versions.json'));return}
+  d.apps.forEach(app=>{
+    const pl=app.platforms||{},keys=['android','ios','windows'].concat(Object.keys(pl).filter(k=>!PF[k])),grid=h('div',{class:'dls'});
+    keys.filter(k=>pl[k]||PF[k]).forEach(k=>{
+      const p=pl[k]||{latest:null,versions:[]},vs=(p.versions||[]).slice(),cur=vs.find(v=>v.version===p.latest)||vs[vs.length-1]||null,url=cur&&safeUrl(cur.url),ok=!!url,pf=PF[k]||['📦',k];
+      const hist=vs.length>1?h('details',null,h('summary',{class:'sub',style:'cursor:pointer'},vs.length+' versions publiées'),
+        h('table',null,h('tr',null,h('th',null,'Version'),h('th',null,'Date'),h('th',null,'Lien')),
+          vs.slice().reverse().map(v=>h('tr',null,h('td',null,v.version),h('td',null,v.date?fmtD(v.date):'—'),h('td',null,safeUrl(v.url)?h('a',{href:v.url,target:'_blank',rel:'noopener',style:'color:var(--acc2)'},'Télécharger'):'—'))))):null;
+      grid.append(h('div',{class:'dl'+(ok?' ok':'')},
+        h('div',{class:'pf'},h('span',{class:'ico'},pf[0]),pf[1],h('span',{class:'grow'}),h('span',{class:'tag '+(ok?'ok':p.latest?'warn':'')},ok?'Disponible':p.latest?'Lien à venir':'Bientôt')),
+        h('div',{class:'big'},p.latest?'v'+p.latest:'—'),
+        h('div',{class:'sub'},cur?(cur.date?'Publiée le '+fmtD(cur.date):'Date non renseignée')+(cur.notes?' · '+cur.notes:''):'Aucune version publiée'),
+        ok?h('div',{class:'actions',style:'margin:0'},h('a',{class:'btn sm',href:url,target:'_blank',rel:'noopener',style:'text-decoration:none'},'Télécharger ↗'),h('button',{class:'btn ghost sm',type:'button',onclick:()=>copy(url)},'Copier le lien')):null,
+        cur&&cur.sha256?h('div',null,h('div',{class:'sub'},'SHA-256'),h('div',{class:'mono'},cur.sha256)):null,hist))});
+    box.append(h('div',{class:'ch'},h('h3',null,app.name||app.id)),grid)})}
+$('dlref').onclick=async()=>{$('dlref').disabled=true;await loadDownloads();$('dlref').disabled=false};
+
+/* ====== coffre Steam (dechiffre dans le navigateur) ====== */
+const V={blob:null,loaded:false,ALL:null,groups:[],pass:'',limit:60,lastSig:'',idle:null,saveT:null};
+const ITERS=[250000,100000,200000,310000,600000,150000,120000,210000,1000000,50000,10000],HASHES=['SHA-256','SHA-512'];
+const SECRET=/^(p|pass|mdp|pin|code|secret|token)$/i,LAB={u:'Identifiant',p:'Mot de passe',pin:'Code PIN',appid:'App ID'};
+const b64=s=>{const b=atob(s),a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return a};
+const b64e=u=>{let s='';for(let i=0;i<u.length;i++)s+=String.fromCharCode(u[i]);return btoa(s)};
+async function decryptWith(v,pass){
+  const enc=new TextEncoder(),salt=b64(v.s),iv=b64(v.i),ct=b64(v.c),base=await crypto.subtle.importKey('raw',enc.encode(pass),'PBKDF2',false,['deriveKey']);
+  for(const hs of HASHES)for(const n of ITERS){
+    try{const k=await crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:n,hash:hs},base,{name:'AES-GCM',length:256},false,['decrypt']);
+      const buf=await crypto.subtle.decrypt({name:'AES-GCM',iv},k,ct),text=new TextDecoder().decode(buf);try{return JSON.parse(text)}catch(e){return text}}catch(e){}}
+  return null}
+async function encrypt(text,pass){
+  const enc=new TextEncoder(),salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12)),base=await crypto.subtle.importKey('raw',enc.encode(pass),'PBKDF2',false,['deriveKey']);
+  const k=await crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:250000,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt']);
+  const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},k,enc.encode(text)));return{v:1,s:b64e(salt),i:b64e(iv),c:b64e(ct)}}
+const ctitle=s=>String(s).replace(/\s+[-\u2013\u2014|]\s*(non\s+disponible|indisponible|dispo)\b.*$/i,'').trim()||String(s);
+function noteState(s){const m=/\s+[-\u2013\u2014|]\s*(non\s+disponible|indisponible|dispo\w*)\b/i.exec(String(s));if(!m)return'';return/^(non|indispo)/i.test(m[1])?'no':'yes'}
+function noteOfGroup(g){let y=0,n=0;g.a.forEach(x=>{const s=noteState(x.g);if(s==='yes')y++;else if(s==='no')n++});return y?'yes':(n?'no':'')}
+function toList(d){if(Array.isArray(d))return d.filter(x=>x&&typeof x==='object');if(d&&typeof d==='object'){let f=null;Object.keys(d).forEach(k=>{if(!f&&Array.isArray(d[k]))f=d[k]});if(f)return f.filter(x=>x&&typeof x==='object')}return null}
+function parseLines(t){const re=/"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"/g;let m;const o=[];while((m=re.exec(t)))o.push([m[1],m[2],m[3]]);return o}
+function vBuild(){const m={},o=[];V.ALL.forEach(x=>{const k=ctitle(x.g||'');if(!m[k]){m[k]=[];o.push(k)}m[k].push(x)});o.sort((a,b)=>a.localeCompare(b,'fr',{sensitivity:'base'}));V.groups=o.map(g=>({g,a:m[g]}))}
+const vmsg=(t,bad)=>{const m=$('vmsg');m.textContent=t||'';m.style.color=bad?'var(--bad)':''};
+const setSave=(t,bad)=>{const e=$('vsave');e.textContent=t;e.className='tag '+(bad?'bad':/^✓/.test(t)?'ok':'')};
+async function vaultEnter(){if(!V.loaded)await loadVault()}
+async function loadVault(){try{applyBlob(await api('GET','/v1/admin/coffre'));V.loaded=true}catch(e){vmsg(e.message,true)}}
+function applyBlob(j){V.blob=j.vault;$('v-unlock').hidden=!j.vault;$('v-none').hidden=!!j.vault;$('vblob').value=j.vault?JSON.stringify(j.vault):'';$('vundo').disabled=!j.hasPrev;
+  vmsg(j.vault?'Version du serveur : '+fmt(j.ts)+(j.src==='site'?' (importée depuis le site)':''):'')}
+async function vUnlock(){
+  const pass=$('vpass').value;if(!pass){vmsg('Entre ta phrase secrète.',true);return}
+  if(!(window.crypto&&crypto.subtle)){vmsg('Ce navigateur ne permet pas le déchiffrement (https requis).',true);return}
+  if(!V.blob)await loadVault();if(!V.blob)return;
+  const b=$('vunlock');b.disabled=true;vmsg('Vérification en cours…');let data=null;
+  try{data=await decryptWith(V.blob,pass);if(data===null&&pass!==pass.trim())data=await decryptWith(V.blob,pass.trim())}catch(e){data=null}
+  b.disabled=false;if(data===null){vmsg('Phrase secrète incorrecte.',true);return}
+  const list=toList(data);if(!list){vmsg('Format du coffre inattendu.',true);return}
+  V.ALL=list;V.pass=pass;V.lastSig='';V.limit=60;vBuild();$('vpass').value='';$('v-lock').hidden=true;$('v-open').hidden=false;vmsg('');setSave('Chargé');renderVault();syncCatalog();bump()}
+function vLock(){V.ALL=null;V.groups=[];V.pass='';clearTimeout(V.idle);$('vlist').textContent='';$('vq').value='';$('vpass').value='';$('rraw').value='';$('v-open').hidden=true;$('v-lock').hidden=false}
+function bump(){clearTimeout(V.idle);if(V.ALL)V.idle=setTimeout(()=>{vLock();toast('Coffre verrouillé (inactivité)',true)},180000)}
+document.addEventListener('click',()=>{if(V.ALL)bump()});document.addEventListener('keydown',()=>{if(V.ALL)bump()});
+async function syncCatalog(){   // la liste des noms de jeux (sans identifiants) alimente « Code de jeu » dans Notifications
+  if(!V.ALL)return;const games=V.groups.map(g=>({g:g.g,n:Math.min(99,g.a.length),f:noteOfGroup(g)})),sig=JSON.stringify(games);if(sig===V.lastSig)return;
+  try{await api('POST','/v1/admin/catalog',{games});V.lastSig=sig;await loadCatalog()}catch(e){toast('Liste des jeux non synchronisée : '+e.message,false)}}
+function persist(){setSave('Enregistrement…');clearTimeout(V.saveT);V.saveT=setTimeout(doSave,500)}
+async function doSave(){
+  if(!V.ALL||!V.pass)return;
+  try{const v=await encrypt(JSON.stringify(V.ALL),V.pass);const j=await api('POST','/v1/admin/coffre',{vault:v});V.blob=j.vault;$('vblob').value=JSON.stringify(j.vault);$('vundo').disabled=!j.hasPrev;setSave('✓ Enregistré sur le serveur');syncCatalog()}
+  catch(e){setSave('⚠ Non enregistré : '+e.message,true)}}
+function field(k,v){
+  const secret=SECRET.test(k);let vis=!secret;const vv=h('div',{class:'v'},vis?v:'••••••••'),row=h('div',{class:'f'},h('div',{class:'k'},LAB[k]||k),vv);
+  if(secret){const eye=h('button',{class:'btn ghost sm',type:'button'},'Afficher');eye.onclick=()=>{vis=!vis;vv.textContent=vis?v:'••••••••';eye.textContent=vis?'Masquer':'Afficher'};row.append(eye)}
+  const cp=h('button',{class:'btn ghost sm',type:'button'},'Copier');cp.onclick=()=>copy(v,cp);row.append(cp);return row}
+function vcard(g){
+  const st=noteOfGroup(g),c=h('div',{class:'vcard'});
+  c.append(h('div',{class:'vh'},h('div',{class:'grow'},h('div',{class:'t'},g.g),h('div',{class:'sub'},g.a.length+' compte'+(g.a.length>1?'s':''))),
+    st?h('span',{class:'tag '+(st==='yes'?'ok':'bad')},st==='yes'?'GeForce NOW':'Non dispo GFN'):null,
+    h('button',{class:'btn ghost sm',type:'button',onclick:()=>{setMode('game');selectGame({g:g.g,n:Math.min(99,g.a.length),f:st});go('notify');$('gto').focus()}},'🎁 Envoyer à un client'),
+    h('button',{class:'btn danger sm',type:'button',onclick:()=>{if(!confirm('Supprimer « '+g.g+' » et ses '+g.a.length+' compte(s) ?'))return;V.ALL=V.ALL.filter(x=>ctitle(x.g||'')!==g.g);vBuild();renderVault();persist()}},'Supprimer')));
+  g.a.forEach((x,i)=>{const box=h('div',{class:'vacc'},h('div',{class:'vacc-h'},h('span',{class:'accn'},'Compte '+(i+1)),
+      g.a.length>1?h('button',{class:'lnk danger',type:'button',onclick:()=>{if(!confirm('Supprimer le compte '+(i+1)+' de « '+g.g+' » ?'))return;V.ALL=V.ALL.filter(y=>y!==x);vBuild();renderVault();persist()}},'Supprimer ce compte'):null));
+    Object.keys(x).forEach(k=>{if(k==='g'||x[k]===''||x[k]==null)return;box.append(field(k,typeof x[k]==='object'?JSON.stringify(x[k]):String(x[k])))});c.append(box)});
+  return c}
+function renderVault(){
+  if(!V.ALL)return;
+  const q=norm($('vq').value),hide=$('vgfn').checked,out=[];let hid=0;
+  V.groups.forEach(g=>{if(hide&&noteOfGroup(g)==='no'){hid++;return}if(q&&!norm(g.g+' '+g.a.map(x=>x.u||'').join(' ')).includes(q))return;out.push(g)});
+  const box=$('vlist');box.textContent='';out.slice(0,V.limit).forEach(g=>box.append(vcard(g)));
+  if(out.length>V.limit)box.append(h('div',{style:'text-align:center;margin:10px 0 20px'},h('button',{class:'btn ghost',type:'button',onclick:()=>{V.limit+=60;renderVault()}},'Afficher plus ('+(out.length-V.limit)+' restants)')));
+  if(!out.length)box.append(h('div',{class:'card'},h('div',{class:'empty'},'Aucun jeu ne correspond')));
+  $('vst1').textContent=out.length+' jeu'+(out.length>1?'x':'')+' affiché'+(out.length>1?'s':'');$('vst2').textContent=V.ALL.length+' comptes'+(hid?' · '+hid+' masqué'+(hid>1?'s':''):'')}
+$('vunlock').onclick=vUnlock;$('vpass').onkeydown=e=>{if(e.key==='Enter')vUnlock()};$('vlock').onclick=vLock;
+$('vq').oninput=()=>{V.limit=60;renderVault()};$('vgfn').onchange=()=>{V.limit=60;renderVault()};
+$('aadd').onclick=()=>{
+  const g=$('ag').value.trim(),u=$('au').value.trim(),p=$('ap').value,pin=$('apin').value.trim(),e=$('aerr');
+  if(!g||!u||!p){e.textContent='Jeu, identifiant et mot de passe sont obligatoires.';return}
+  const x=V.ALL.find(a=>ctitle(a.g||'').toLowerCase()===ctitle(g).toLowerCase()&&a.u===u);
+  if(x){x.p=p;if(pin)x.pin=pin;e.textContent='Compte mis à jour.'}else{const o={g,u,p};if(pin)o.pin=pin;V.ALL.push(o);e.textContent='Compte ajouté.'}
+  ['ag','au','ap','apin'].forEach(i=>$(i).value='');vBuild();renderVault();persist()};
+$('rfile').onchange=function(){const f=this.files&&this.files[0],inp=this;if(!f)return;const rd=new FileReader();
+  rd.onload=()=>{const t=String(rd.result||''),n=parseLines(t).length;$('rraw').value=t;inp.value='';$('rerr').textContent=n?n+' comptes reconnus. Choisis « Ajouter » ou « Remplacer ».':'Aucune ligne reconnue dans ce fichier.'};rd.readAsText(f,'utf-8')};
+$('radd').onclick=()=>{const p=parseLines($('rraw').value),e=$('rerr');if(!p.length){e.textContent='Aucune ligne reconnue. Format : "Jeu", "compte", "motdepasse",';return}
+  let n=0;p.forEach(r=>{if(!V.ALL.some(x=>x.g===r[0]&&x.u===r[1])){V.ALL.push({g:r[0],u:r[1],p:r[2]});n++}});$('rraw').value='';vBuild();renderVault();persist();e.textContent=n+' compte'+(n>1?'s':'')+' ajouté'+(n>1?'s':'')+'.'};
+$('rrep').onclick=()=>{const p=parseLines($('rraw').value),e=$('rerr');if(!p.length){e.textContent='Aucune ligne reconnue.';return}
+  if(!confirm('Remplacer toute la liste par '+p.length+' comptes ? (une sauvegarde précédente reste disponible)'))return;
+  const pins={};V.ALL.forEach(x=>{if(x.pin&&x.u&&!pins[x.u])pins[x.u]=x.pin});
+  V.ALL=p.map(r=>{const o={g:r[0],u:r[1],p:r[2]};if(pins[r[1]])o.pin=pins[r[1]];return o});$('rraw').value='';vBuild();renderVault();persist();e.textContent=p.length+' comptes importés. Les codes PIN déjà connus ont été conservés.'};
+$('vcopy').onclick=()=>copy($('vblob').value,$('vcopy'));
+async function reloadVault(){
+  try{applyBlob(await api('GET','/v1/admin/coffre'));
+    if(V.ALL&&V.pass){const d=V.blob?await decryptWith(V.blob,V.pass):null,l=d&&toList(d);if(l){V.ALL=l;V.lastSig='';vBuild();renderVault();syncCatalog()}else{vLock();vmsg('Le coffre a changé : déverrouille-le de nouveau.',true)}}}
+  catch(e){toast(e.message,false)}}
+$('vundo').onclick=async()=>{if(!confirm('Revenir à la sauvegarde précédente du coffre ?'))return;try{await api('POST','/v1/admin/coffre/undo');await reloadVault();toast('Version précédente rétablie ✓',true)}catch(e){toast(e.message,false)}};
+$('vresite').onclick=async()=>{if(!confirm('Remplacer le coffre du serveur par celui de la page comptes.html du site ? (une sauvegarde précédente reste disponible)'))return;
+  try{await api('POST','/v1/admin/coffre/import');await reloadVault();toast('Coffre rechargé depuis le site ✓',true)}catch(e){toast(e.message,false)}};
+$('vfromsite').onclick=async()=>{try{applyBlob(await api('POST','/v1/admin/coffre/import'));toast('Coffre importé depuis le site ✓',true)}catch(e){toast(e.message,false)}};
+$('vimport').onclick=async()=>{let v;try{v=JSON.parse($('vpaste').value)}catch(e){toast('Code illisible (JSON attendu)',false);return}
+  try{applyBlob(await api('POST','/v1/admin/coffre',{vault:v}));$('vpaste').value='';toast('Coffre importé ✓',true)}catch(e){toast(e.message,false)}};
+
+/* ====== demarrage ====== */
+setInterval(()=>{if(key&&!$('app').hidden&&!document.hidden&&!document.activeElement.matches('input,textarea,select'))load(true)},8000);
 if(key)load();
 </script></body></html>

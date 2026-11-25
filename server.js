@@ -32,6 +32,8 @@ function initDb() {
   purchases: load('purchases.json', []),  // v5.35 : achats (PIN / thème) { id, user, kind, item, theme, tx, status, ts, done } ; status = pending | accepted | refused
   unlocks: load('unlocks.json', {}),      // v5.35 : pseudo en minuscules -> [indices des thèmes débloqués]
   gunlocks: load('gunlocks.json', {}),    // v5.36 : pseudo en minuscules -> [noms des jeux débloqués (Compte Jeux)]
+  coffre: load('coffre.json', null),      // v5.47 : coffre Steam CHIFFRE (la phrase secrète ne quitte jamais le navigateur de l'administrateur) { vault: {v,s,i,c}, ts, src, prev }
+  catalog: load('catalog.json', { games: [], ts: 0 }),   // v5.47 : liste des jeux (noms seulement) pour « envoyer un jeu » depuis /admin
   seq: Object.assign({ msg: 0, notif: 0, dm: 0, grp: 0, gmsg: 0, purchase: 0 }, load('seq.json', {}))
 });
 }
@@ -134,7 +136,7 @@ async function ghFinal() { try { flush(); ghBusy = false; await ghPush(); } catc
 const R_URL = (process.env.UPSTASH_REDIS_REST_URL || '').replace(/\/+$/, ''), R_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
 const REMOTE = !GH_ON && /^(https:\/\/|http:\/\/localhost[:/])/.test(R_URL + '/') && !!R_TOKEN;
 const RK = 'gondzet:f:', RCHUNK = 700000, rQueue = new Set();
-const JSON_NAMES = ['users', 'sessions', 'messages', 'notifs', 'friends', 'dms', 'groups', 'gmsgs', 'steam', 'vaults', 'trials', 'purchases', 'unlocks', 'gunlocks', 'seq'];
+const JSON_NAMES = ['users', 'sessions', 'messages', 'notifs', 'friends', 'dms', 'groups', 'gmsgs', 'steam', 'vaults', 'trials', 'purchases', 'unlocks', 'gunlocks', 'coffre', 'catalog', 'seq'];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function rcmd(args) {
   const r = await fetch(R_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + R_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(args), signal: AbortSignal.timeout(20000) });
@@ -254,6 +256,46 @@ function admin(req) {
   if ((hits.get(k) || []).filter(t => now - t < 600e3).length >= 20) throw new HttpErr(429, 'Trop d\'essais');
   if (!safeEq(String(req.headers['x-admin-key'] || ''), ADMIN_KEY)) { limited(k, 20, 600e3); throw new HttpErr(403, 'Clé administrateur incorrecte'); }
 }
+// v5.46 : evenements pour l'appli G-Ondzet Admin (achats, nouveaux comptes, messages du chat)
+function adminEvents(after, now) {
+  const ev = [];
+  for (let i = db.purchases.length - 1; i >= 0 && db.purchases[i].ts > after; i--) {
+    const p = db.purchases[i]; if (p.ts > now) continue;
+    const what = p.kind === 'theme' ? 'le thème « ' + p.item + ' »' : p.kind === 'pin' ? 'le code PIN de « ' + p.item + ' »' : 'le jeu « ' + p.item + ' »' + (p.acc ? ' — Compte ' + p.acc : '');
+    ev.push({ id: 'p' + p.id, type: 'purchase', ts: p.ts, title: '🛒 Nouvel achat · ' + p.user, text: p.user + ' veut ' + what + (p.tx ? ' · ID ' + p.tx : p.image ? ' · photo de la transaction jointe' : '') });
+  }
+  for (let i = db.messages.length - 1; i >= 0 && db.messages[i].ts > after; i--) {
+    const m = db.messages[i]; if (m.ts > now) continue;
+    ev.push({ id: 'm' + m.id, type: 'message', ts: m.ts, title: '💬 Chat · ' + m.user, text: m.text || (m.audio ? '(message vocal)' : '(image)') });
+  }
+  for (const u of Object.values(db.users)) if (u.created > after && u.created <= now) ev.push({ id: 'u' + u.name, type: 'user', ts: u.created, title: '👤 Nouveau compte', text: u.name });
+  return ev.sort((a, b) => a.ts - b.ts).slice(-30);
+}
+// v5.47 : site vitrine (versions.json = infos de telechargement, comptes.html = coffre Steam chiffre)
+const SITE_URL = (process.env.SITE_URL || 'https://headless-txoacprvfyt-tedondzet-1409.wix-site-host.com').replace(/\/+$/, '');
+async function siteGet(p) {
+  let r;
+  try { r = await fetch(SITE_URL + p, { headers: { 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(12000) }); }
+  catch (e) { throw new HttpErr(502, 'Site injoignable : ' + SITE_URL); }
+  if (!r.ok) throw new HttpErr(502, 'Le site a répondu ' + r.status + ' pour ' + p);
+  return r.text();
+}
+const vaultOk = v => !!v && typeof v === 'object' && typeof v.s === 'string' && typeof v.i === 'string' && typeof v.c === 'string' && v.c.length > 20 && v.c.length < 900000 && v.s.length < 100 && v.i.length < 100;
+const vaultClean = v => ({ v: 1, s: v.s, i: v.i, c: v.c });
+async function vaultFromSite() {
+  const html = await siteGet('/comptes.html');
+  const m = /var\s+VAULT\s*=\s*(\{[^;]*?\})\s*;/.exec(html);
+  if (!m) throw new HttpErr(502, 'Coffre introuvable dans comptes.html (variable VAULT)');
+  let v; try { v = JSON.parse(m[1]); } catch (e) { throw new HttpErr(502, 'Coffre illisible dans comptes.html'); }
+  if (!vaultOk(v)) throw new HttpErr(502, 'Coffre invalide dans comptes.html');
+  return vaultClean(v);
+}
+function setCoffre(vault, src) {   // garde UNE version precedente (bouton « Annuler la derniere sauvegarde »)
+  db.coffre = { vault, ts: Date.now(), src, prev: db.coffre && db.coffre.vault ? { vault: db.coffre.vault, ts: db.coffre.ts } : null };
+  save('coffre');
+}
+const coffreOut = () => db.coffre && db.coffre.vault ? { vault: db.coffre.vault, ts: db.coffre.ts, src: db.coffre.src || '', hasPrev: !!db.coffre.prev } : { vault: null, ts: 0, src: '', hasPrev: false };
+let dlCache = { ts: 0, data: null };
 const pub = u => ({ username: u.name, avatar: avatarUrl(u) });
 // v5.23 : amis / groupes
 const dn = k => (db.users[k] ? db.users[k].name : k);                                   // pseudo affiché
@@ -638,6 +680,20 @@ const routes = {
   'POST /v1/admin/notify': async (req, res) => {
     admin(req);
     const b = await readJson(req, 20e3);
+    if (b.kind === 'game') {   // v5.47 : « Code de jeu » = le client OBTIENT le jeu tout de suite (meme mecanisme qu'un achat accepte : notification « unlock » appliquee par l'appli)
+      const game = str(b.game, 1, 120), toName = String(b.to || '').trim();
+      if (!game) throw new HttpErr(400, 'Choisis un jeu dans la liste');
+      if (!toName) throw new HttpErr(400, 'Indique le pseudo du client qui reçoit le jeu');
+      const user = db.users[toName.toLowerCase()];
+      if (!user) throw new HttpErr(404, 'Utilisateur introuvable : ' + toName);
+      const accN = +b.acc, acc = Number.isInteger(accN) && accN >= 1 && accN <= 99 ? accN : null;
+      const name = game.replace(/[\u0000-\u001f<>]/g, ''), k = user.name.toLowerCase(), l = db.gunlocks[k] || (db.gunlocks[k] = []), gk = gameKey(name, acc);
+      if (!l.some(g => g.toLowerCase() === gk.toLowerCase())) l.push(gk);
+      const note = typeof b.body === 'string' ? b.body.replace(/[\u0000-\u001f<>]/g, ' ').trim().slice(0, 300) : '';
+      const n = { id: ++db.seq.notif, kind: 'unlock', title: 'Jeu offert : ' + name + (acc ? ' — Compte ' + acc : ''), body: note || 'Ton jeu est débloqué : va dans Compte Jeux et touche « Ajouter ».', code: null, to: user.name, theme: null, ts: Date.now(), unlockGame: name, unlockAcc: acc };
+      db.notifs.push(n); save('notifs', 'gunlocks', 'seq');
+      return send(res, 201, n);
+    }
     const kind = b.kind === 'code' ? 'code' : 'promo', title = str(b.title, 1, 80), body = typeof b.body === 'string' ? b.body.trim().slice(0, 600) : '';
     const code = kind === 'code' ? str(b.code, 1, 200) : null;
     if (!title) throw new HttpErr(400, 'Titre obligatoire');
@@ -649,6 +705,71 @@ const routes = {
     const n = { id: ++db.seq.notif, kind, title, body, code, to, theme, ts: Date.now() };
     db.notifs.push(n); save('notifs', 'seq');
     send(res, 201, n);
+  },
+  // v5.46 : appli G-Ondzet Admin. Requete « longue » : le serveur la garde ouverte (25 s max) et repond des qu'un evenement arrive.
+  // after=0 (ou absent) : ne renvoie que le curseur « now » (l'appli ne rejoue pas l'ancien historique).
+  'GET /v1/admin/events': async (req, res, url) => {
+    admin(req);
+    const pending = () => db.purchases.filter(p => p.status === 'pending').length;
+    const after = +url.searchParams.get('after') || 0, wait = Math.min(25, Math.max(0, +url.searchParams.get('wait') || 0)), t0 = Date.now();
+    if (after <= 0) return send(res, 200, { events: [], now: Date.now(), pending: pending() });
+    let ev, now;
+    for (;;) {
+      now = Date.now(); ev = adminEvents(after, now);
+      if (ev.length || now - t0 >= wait * 1000 || req.destroyed) break;
+      await sleep(1000);
+    }
+    send(res, 200, { events: ev, now, pending: pending() });
+  },
+  // v5.47 : infos de telechargement de l'application (lues dans versions.json du site, gardees 60 s)
+  'GET /v1/admin/downloads': async (req, res) => {
+    admin(req);
+    if (!dlCache.data || Date.now() - dlCache.ts > 60e3) {
+      try { const j = JSON.parse(await siteGet('/versions.json?t=' + Date.now())); dlCache = { ts: Date.now(), data: j }; }
+      catch (e) { if (!dlCache.data) throw e instanceof HttpErr ? e : new HttpErr(502, 'versions.json illisible sur le site'); }
+    }
+    send(res, 200, { site: SITE_URL, ts: dlCache.ts, apps: Array.isArray(dlCache.data.apps) ? dlCache.data.apps : [] });
+  },
+  // v5.47 : coffre Steam chiffre. Le serveur ne voit jamais la phrase secrete : le navigateur dechiffre / rechiffre.
+  'GET /v1/admin/coffre': async (req, res) => {
+    admin(req);
+    if (!db.coffre || !db.coffre.vault) { try { setCoffre(await vaultFromSite(), 'site'); } catch (e) { /* pas de coffre sur le site : l'admin pourra l'importer a la main */ } }
+    send(res, 200, coffreOut());
+  },
+  'POST /v1/admin/coffre': async (req, res) => {
+    admin(req);
+    const b = await readJson(req, 1.2e6);
+    if (!vaultOk(b.vault)) throw new HttpErr(400, 'Coffre invalide');
+    setCoffre(vaultClean(b.vault), 'admin');
+    send(res, 200, coffreOut());
+  },
+  'POST /v1/admin/coffre/import': async (req, res) => {   // remplace le coffre du serveur par celui de la page comptes.html du site
+    admin(req);
+    setCoffre(await vaultFromSite(), 'site');
+    send(res, 200, coffreOut());
+  },
+  'POST /v1/admin/coffre/undo': async (req, res) => {
+    admin(req);
+    if (!db.coffre || !db.coffre.prev) throw new HttpErr(404, 'Aucune version précédente');
+    const cur = { vault: db.coffre.vault, ts: db.coffre.ts };
+    db.coffre = { vault: db.coffre.prev.vault, ts: Date.now(), src: 'undo', prev: cur }; save('coffre');
+    send(res, 200, coffreOut());
+  },
+  'GET /v1/admin/catalog': async (req, res) => { admin(req); send(res, 200, db.catalog); },
+  'POST /v1/admin/catalog': async (req, res) => {
+    admin(req);
+    const b = await readJson(req, 600e3);
+    if (!Array.isArray(b.games) || b.games.length > 5000) throw new HttpErr(400, 'Liste invalide (5000 jeux max)');
+    const seen = new Set(), games = [];
+    for (const x of b.games) {
+      const g = x && typeof x.g === 'string' ? x.g.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 120) : '';
+      if (!g || seen.has(g.toLowerCase())) continue;
+      seen.add(g.toLowerCase());
+      games.push({ g, n: Number.isInteger(x.n) && x.n >= 1 && x.n <= 99 ? x.n : 1, f: x.f === 'yes' || x.f === 'no' ? x.f : '' });
+    }
+    games.sort((a, c) => a.g.localeCompare(c.g, 'fr', { sensitivity: 'base' }));
+    db.catalog = { games, ts: Date.now() }; save('catalog');
+    send(res, 200, { count: games.length, ts: db.catalog.ts });
   },
   'GET /v1/admin/overview': async (req, res) => {
     admin(req);

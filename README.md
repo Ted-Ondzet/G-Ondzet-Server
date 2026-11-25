@@ -66,3 +66,17 @@ Test : `node test_avatar.js`.
 - `keepAliveTimeout` 120 s : le proxy de Render ne tombe plus sur une connexion déjà fermée (cause classique de 502 au hasard).
 - Une erreur imprévue est journalisée mais ne tue plus le processus.
 - `GET /healthz` répond `{ok, ready}` : mets `/healthz` dans **Settings > Health Check Path** sur Render, et un ping toutes les 5-10 min (UptimeRobot, gratuit) évite l'endormissement du service gratuit.
+
+## Appli G-Ondzet Admin (v5.46)
+`GET /v1/admin/events?after=<ms>&wait=25` (en-tête `x-admin-key`) : requête « longue » utilisée par l'appli Android **G-Ondzet Admin**. Elle répond dès qu'il y a un nouvel **achat** (jeu / thème / PIN), un **nouveau compte** ou un **message du chat** :
+`{ events: [{ id, type: "purchase"|"user"|"message", ts, title, text }], now, pending }` (`pending` = achats en attente). `after=0` ne renvoie que le curseur `now`.
+Aucun changement pour l'appli du client ni pour `/admin`. Test : `node test_events.js` (serveur lancé avec `ADMIN_KEY=secret123 PORT=3998`).
+
+## v5.47 : nouvelle page /admin (sections), jeu offert, coffre Steam, téléchargements
+- **/admin** refaite : Tableau de bord · Achats · Notifications · Comptes · Chat · Coffre Steam · Téléchargements (menu latéral sur ordinateur, onglets sur téléphone / dans l'appli G-Ondzet Admin).
+- **Notifications › Code de jeu** : plus de champ de saisie ; liste déroulante de tous les jeux avec une **barre de recherche en haut**. En envoyant, le client **obtient le jeu immédiatement** : `POST /v1/admin/notify` `{kind:"game", game, acc?, to, body?}` débloque le jeu (comme un achat accepté) et crée une notification `unlock` (`unlockGame`, `unlockAcc`) que l'appli applique. Le client (`to`) est obligatoire.
+- **Coffre Steam** (chiffré, la phrase secrète ne quitte jamais le navigateur) : `GET/POST /v1/admin/coffre` (le serveur ne stocke que le blob chiffré `{v,s,i,c}` + une version précédente), `POST /v1/admin/coffre/import` (relit `VAULT` dans `comptes.html` du site), `POST /v1/admin/coffre/undo`. Au premier accès, le coffre est importé automatiquement depuis le site.
+- **Catalogue des jeux** : `GET/POST /v1/admin/catalog` (noms seulement, sans identifiants). Il est mis à jour automatiquement à chaque déverrouillage / modification du coffre dans /admin et alimente la liste de « Code de jeu ». Première utilisation : ouvre le Coffre Steam et déverrouille-le une fois.
+- **Téléchargements** : `GET /v1/admin/downloads` lit `versions.json` du site (cache 60 s) : version, date, lien, SHA-256 par plateforme (Android, iOS, Windows).
+- Variable d'environnement facultative **`SITE_URL`** (défaut : `https://headless-txoacprvfyt-tedondzet-1409.wix-site-host.com`).
+- Tests : `node test_admin_v547.js` (serveur lancé avec `ADMIN_KEY=secret123 PORT=3998 SITE_URL=http://localhost:3997`, les tests démarrent leur propre faux site sur le port 3997).
