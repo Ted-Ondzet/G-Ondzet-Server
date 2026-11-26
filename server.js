@@ -390,7 +390,84 @@ setInterval(() => {
   }
 }, 60e3).unref();
 
+// ---------------------------------------------------------------- v5.61 : appels vocaux entre amis (signalisation WebRTC)
+// En memoire seulement. state : ringing -> live -> ended | declined. Le son passe directement entre les deux telephones.
+const calls = new Map();
+const callOver = c => c.state === 'ended' || c.state === 'declined';
+function callEnd(c, state) { c.state = state || 'ended'; c.t = Date.now(); }
+function callSweep() {
+  const n = Date.now();
+  for (const [k, c] of calls) {
+    if (callOver(c)) { if (n - c.t > 60e3) calls.delete(k); }
+    else if (c.state === 'ringing' ? n - c.t > 45e3 : n - Math.min(c.seen.a, c.seen.b) > 45e3) callEnd(c);   // sans reponse, ou un des deux a disparu
+  }
+}
+setInterval(callSweep, 5e3).unref();
+function callFor(u, id) {
+  callSweep();
+  const c = calls.get(String(id || ''));
+  if (!c || (lc(c.from) !== lc(u.name) && lc(c.to) !== lc(u.name))) throw new HttpErr(404, 'Appel introuvable');
+  c.seen[lc(c.from) === lc(u.name) ? 'a' : 'b'] = Date.now();
+  return c;
+}
+
 const routes = {
+  // v5.61 : photos de profil d'autres joueurs (amis, messages, groupes, recherche) : { avatars: { pseudo_minuscule: '/uploads/…' ou '' } }
+  'GET /v1/avatars': async (req, res, url) => {
+    const u = auth(req);
+    if (limited('avs|' + u.name, 120, 60e3)) throw new HttpErr(429, 'Doucement');
+    const out = {};
+    String(url.searchParams.get('names') || '').split(',').slice(0, 100).forEach(n => {
+      const k = lc(n.trim());
+      if (k && Object.prototype.hasOwnProperty.call(db.users, k)) out[k] = db.users[k].banned ? '' : avatarUrl(db.users[k]);
+    });
+    send(res, 200, { avatars: out });
+  },
+  'POST /v1/call/invite': async (req, res) => {
+    const u = auth(req), mk = lc(u.name);
+    if (limited('call|' + mk, 10, 60e3)) throw new HttpErr(429, 'Doucement : trop d\'appels');
+    const b = await readJson(req, 2e3), k = lc(String(b.to || '').trim());
+    if (!fr(u).f.includes(k)) throw new HttpErr(403, 'Ce joueur n\'est pas dans tes amis');
+    callSweep();
+    for (const c of calls.values()) {
+      if (callOver(c)) continue;
+      const who = [lc(c.from), lc(c.to)];
+      if (who.includes(mk)) throw new HttpErr(409, 'Tu as déjà un appel en cours');
+      if (who.includes(k)) throw new HttpErr(409, dn(k) + ' est déjà en appel');
+    }
+    const id = crypto.randomBytes(12).toString('hex'), n = Date.now();
+    calls.set(id, { id, from: u.name, to: dn(k), state: 'ringing', t: n, seen: { a: n, b: n }, seq: 0, msgs: [] });
+    send(res, 201, { call: id, to: dn(k) });
+  },
+  'GET /v1/call/poll': async (req, res) => {
+    const mk = lc(auth(req).name);
+    callSweep();
+    const c = [...calls.values()].find(x => x.state === 'ringing' && lc(x.to) === mk);
+    send(res, 200, { incoming: c ? { call: c.id, from: c.from } : null });
+  },
+  'POST /v1/call/accept': async (req, res) => {
+    const u = auth(req), c = callFor(u, (await readJson(req, 2e3)).call);
+    if (lc(c.to) !== lc(u.name) || c.state !== 'ringing') throw new HttpErr(409, 'Appel terminé');
+    c.state = 'live'; c.t = Date.now(); c.seen = { a: c.t, b: c.t };
+    send(res, 200, { state: c.state });
+  },
+  'POST /v1/call/end': async (req, res) => {
+    const u = auth(req), c = callFor(u, (await readJson(req, 2e3)).call);
+    if (!callOver(c)) callEnd(c, c.state === 'ringing' && lc(c.to) === lc(u.name) ? 'declined' : 'ended');
+    send(res, 200, { state: c.state });
+  },
+  'POST /v1/call/signal': async (req, res) => {
+    const u = auth(req), b = await readJson(req, 60e3), c = callFor(u, b.call);
+    if (c.state !== 'live') throw new HttpErr(409, 'Appel terminé');
+    if (!['offer', 'answer', 'ice'].includes(b.kind) || typeof b.data !== 'string' || b.data.length > 40000) throw new HttpErr(400, 'Signal invalide');
+    if (c.msgs.length >= 200) throw new HttpErr(429, 'Trop de signaux');
+    c.msgs.push({ id: ++c.seq, from: lc(u.name), kind: b.kind, data: b.data });
+    send(res, 201, { id: c.seq });
+  },
+  'GET /v1/call/signal': async (req, res, url) => {
+    const u = auth(req), c = callFor(u, url.searchParams.get('call')), after = +url.searchParams.get('after') || 0;
+    send(res, 200, { state: c.state, msgs: c.msgs.filter(m => m.id > after && m.from !== lc(u.name)).map(m => ({ id: m.id, kind: m.kind, data: m.data })) });
+  },
   // v5.31 : essai gratuit de 7 jours des thèmes payants, lié à l'APPAREIL (survit à l'effacement des données de l'appli)
   'POST /v1/trials/sync': async (req, res) => {
     if (limited('trial|' + ipOf(req), 60, 600e3)) throw new HttpErr(429, 'Trop d\'essais');

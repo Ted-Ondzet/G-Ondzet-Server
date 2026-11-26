@@ -89,3 +89,6 @@ Routes (toutes avec `Authorization: Bearer <jeton>`), **salles gardées en mémo
 - `POST /v1/share/signal {room, kind: offer|answer|ice|bye, data}` et `GET /v1/share/signal?room=&after=` : mise en relation WebRTC (le flux vidéo et la manette passent directement entre les deux téléphones, pas par ce serveur).
 - Expiration : invitation non acceptée 10 min, partie 8 h, partie terminée 2 min.
 - Test : `PORT=3917 node test_share.js` (il lance son propre serveur temporaire ; 11 contrôles).
+
+## v5.61 : photos de profil et appels vocaux
+`GET /v1/avatars?names=a,b` ; appels entre amis : `POST /v1/call/invite|accept|end|signal`, `GET /v1/call/poll|signal` (en mémoire). Test : `node test_call.js`.
