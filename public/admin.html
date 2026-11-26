@@ -208,7 +208,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;p
     <div id="v-lock">
      <div class="card" id="v-unlock">
       <div class="fld"><label for="vpass">Phrase secrète du coffre</label><input id="vpass" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-      <div class="actions" style="margin-top:0"><button class="btn" id="vunlock" type="button">Déverrouiller</button></div>
+      <div class="actions" style="margin-top:0"><button class="btn" id="vunlock" type="button">Déverrouiller</button><button class="btn ghost" id="vdl2" type="button">⬇️ Télécharger le code chiffré (.txt)</button></div>
       <div id="vmsg" class="sub" style="margin-top:10px;min-height:18px"></div>
      </div>
      <div class="card" id="v-none" hidden>
@@ -234,7 +234,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;p
      <details class="card fold"><summary>🔁 Synchronisation et sauvegardes</summary><div class="in">
       <div class="note">Chaque modification est enregistrée (chiffrée) sur le serveur. Pour que la page publique <b>comptes.html</b> du site soit aussi à jour, copie le code chiffré ci-dessous et colle-le dans le site.</div>
       <div class="fld" style="margin-top:12px"><textarea id="vblob" readonly></textarea></div>
-      <div class="actions" style="margin-top:0"><button class="btn ghost" id="vcopy" type="button">Copier le code chiffré</button><button class="btn ghost" id="vundo" type="button">Annuler la dernière sauvegarde</button><button class="btn danger" id="vresite" type="button">Recharger depuis le site</button></div></div></details>
+      <div class="actions" style="margin-top:0"><button class="btn ghost" id="vcopy" type="button">Copier le code chiffré</button><button class="btn ghost" id="vdl" type="button">⬇️ Télécharger le code chiffré (.txt)</button><button class="btn ghost" id="vundo" type="button">Annuler la dernière sauvegarde</button><button class="btn danger" id="vresite" type="button">Recharger depuis le site</button></div></div></details>
      <div id="vlist"></div>
     </div>
    </section>
@@ -536,6 +536,11 @@ $('rrep').onclick=()=>{const p=parseLines($('rraw').value),e=$('rerr');if(!p.len
   const pins={};V.ALL.forEach(x=>{if(x.pin&&x.u&&!pins[x.u])pins[x.u]=x.pin});
   V.ALL=p.map(r=>{const o={g:r[0],u:r[1],p:r[2]};if(pins[r[1]])o.pin=pins[r[1]];return o});$('rraw').value='';vBuild();renderVault();persist();e.textContent=p.length+' comptes importés. Les codes PIN déjà connus ont été conservés.'};
 $('vcopy').onclick=()=>copy($('vblob').value,$('vcopy'));
+function dlBlob(){   // le code est déjà chiffré : le téléchargement ne révèle aucun mot de passe
+  const t=V.blob?JSON.stringify(V.blob):'';if(!t){toast('Aucun coffre à télécharger',false);return}
+  const d=new Date(),z=n=>String(n).padStart(2,'0'),name='coffre-steam-'+d.getFullYear()+z(d.getMonth()+1)+z(d.getDate())+'-'+z(d.getHours())+z(d.getMinutes())+'.txt';
+  const u=URL.createObjectURL(new Blob([t],{type:'text/plain;charset=utf-8'})),a=document.createElement('a');a.href=u;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1000);toast('Code chiffré téléchargé ✓',true)}
+$('vdl').onclick=dlBlob;$('vdl2').onclick=dlBlob;
 async function reloadVault(){
   try{applyBlob(await api('GET','/v1/admin/coffre'));
     if(V.ALL&&V.pass){const d=V.blob?await decryptWith(V.blob,V.pass):null,l=d&&toList(d);if(l){V.ALL=l;V.lastSig='';vBuild();renderVault();syncCatalog()}else{vLock();vmsg('Le coffre a changé : déverrouille-le de nouveau.',true)}}}
