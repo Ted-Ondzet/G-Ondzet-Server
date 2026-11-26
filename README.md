@@ -80,3 +80,12 @@ Aucun changement pour l'appli du client ni pour `/admin`. Test : `node test_even
 - **Téléchargements** : `GET /v1/admin/downloads` lit `versions.json` du site (cache 60 s) : version, date, lien, SHA-256 par plateforme (Android, iOS, Windows).
 - Variable d'environnement facultative **`SITE_URL`** (défaut : `https://headless-txoacprvfyt-tedondzet-1409.wix-site-host.com`).
 - Tests : `node test_admin_v547.js` (serveur lancé avec `ADMIN_KEY=secret123 PORT=3998 SITE_URL=http://localhost:3997`, les tests démarrent leur propre faux site sur le port 3997).
+
+## v5.56 : partage de partie GeForce NOW (invitation d'un ami)
+Routes (toutes avec `Authorization: Bearer <jeton>`), **salles gardées en mémoire uniquement** (rien n'est écrit sur disque ; elles disparaissent au redémarrage du serveur) :
+- `POST /v1/share/invite {to, game}` : l'hôte invite un AMI (403 sinon) ; une seule partie partagée par hôte ; ajoute une notification « 🎮 Pseudo t'invite à jouer » à l'ami.
+- `GET /v1/share/poll` : invitations reçues + mes parties en cours.
+- `GET /v1/share/room?id=` · `POST /v1/share/accept|decline|end {room}`.
+- `POST /v1/share/signal {room, kind: offer|answer|ice|bye, data}` et `GET /v1/share/signal?room=&after=` : mise en relation WebRTC (le flux vidéo et la manette passent directement entre les deux téléphones, pas par ce serveur).
+- Expiration : invitation non acceptée 10 min, partie 8 h, partie terminée 2 min.
+- Test : `PORT=3917 node test_share.js` (il lance son propre serveur temporaire ; 11 contrôles).

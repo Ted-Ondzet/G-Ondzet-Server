@@ -372,6 +372,24 @@ function steamIdOf(v) {
 }
 const cleanLabel = v => typeof v === 'string' ? v.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 40) : '';
 
+// ---------------------------------------------------------------- v5.56 : partage de partie GeForce NOW (signalisation WebRTC hote <-> ami)
+// Salles gardees EN MEMOIRE seulement (jamais ecrites sur disque) : { id, host, guest, game, state, t, seq, msgs }.
+// state : invited -> live -> ended | declined. Le flux video et la manette passent directement entre les deux telephones (WebRTC), pas par ce serveur.
+const rooms = new Map();
+const lc = s => String(s || '').toLowerCase();
+function roomFor(u, id) {
+  const r = rooms.get(String(id || ''));
+  if (!r || (lc(r.host) !== lc(u.name) && lc(r.guest) !== lc(u.name))) throw new HttpErr(404, 'Partie introuvable');
+  return r;
+}
+setInterval(() => {
+  const n = Date.now();
+  for (const [k, r] of rooms) {
+    const old = r.state === 'ended' || r.state === 'declined' ? n - r.t > 120e3 : r.state === 'invited' ? n - r.t > 10 * 60e3 : n - r.t > 8 * 3600e3;
+    if (old) rooms.delete(k);
+  }
+}, 60e3).unref();
+
 const routes = {
   // v5.31 : essai gratuit de 7 jours des thèmes payants, lié à l'APPAREIL (survit à l'effacement des données de l'appli)
   'POST /v1/trials/sync': async (req, res) => {
@@ -667,6 +685,65 @@ const routes = {
       games: db.gunlocks[k] || [],   // v5.36 : jeux débloqués (l'appli les restaure après réinstallation)
       purchases: db.purchases.filter(p => p.user.toLowerCase() === k).slice(-30).map(p => ({ id: p.id, kind: p.kind, item: p.item, acc: p.acc || null, status: p.status, ts: p.ts }))
     });
+  },
+
+  // ---- v5.56 : partage de partie (l'hote invite un ami ; l'ami voit la partie et joue avec sa manette / ses touches)
+  'POST /v1/share/invite': async (req, res) => {
+    const u = auth(req);
+    if (limited('shi|' + lc(u.name), 20, 600e3)) throw new HttpErr(429, 'Trop d\'invitations, réessaie dans quelques minutes');
+    const b = await readJson(req, 4e3), k = lc(b.to), t = db.users[k];
+    if (!t || t.banned) throw new HttpErr(404, 'Ami introuvable');
+    if (!frk(lc(u.name)).f.includes(k)) throw new HttpErr(403, 'Tu ne peux inviter que tes amis');
+    for (const [id, r] of rooms) if (lc(r.host) === lc(u.name) && r.state !== 'ended' && r.state !== 'declined') { r.state = 'ended'; r.t = Date.now(); }   // une seule partie partagee a la fois
+    const game = typeof b.game === 'string' ? b.game.replace(/[\u0000-\u001f<>]/g, '').slice(0, 80) : '';
+    const r = { id: crypto.randomBytes(8).toString('hex'), host: u.name, guest: t.name, game, state: 'invited', t: Date.now(), seq: 0, msgs: [] };
+    rooms.set(r.id, r);
+    db.notifs.push({ id: ++db.seq.notif, kind: 'share', title: '🎮 ' + u.name + ' t\'invite à jouer', body: 'Ouvre G-Ondzet Now pour voir sa partie GeForce NOW' + (game ? ' (' + game + ')' : '') + ' et jouer avec lui.', code: '', to: t.name, theme: '', ts: Date.now() });
+    if (db.notifs.length > 3000) db.notifs.splice(0, db.notifs.length - 3000);
+    save('notifs', 'seq');
+    send(res, 201, { room: r.id, state: r.state, guest: t.name });
+  },
+  'GET /v1/share/poll': async (req, res) => {
+    const u = auth(req), me = lc(u.name), invites = [], mine = [];
+    for (const r of rooms.values()) {
+      if (r.state === 'invited' && lc(r.guest) === me) invites.push({ room: r.id, host: r.host, game: r.game, ts: r.t });
+      if (lc(r.host) === me || lc(r.guest) === me) mine.push({ room: r.id, role: lc(r.host) === me ? 'host' : 'guest', host: r.host, guest: r.guest, state: r.state });
+    }
+    send(res, 200, { invites, rooms: mine });
+  },
+  'GET /v1/share/room': async (req, res, url) => {
+    const r = roomFor(auth(req), url.searchParams.get('id'));
+    send(res, 200, { room: r.id, host: r.host, guest: r.guest, game: r.game, state: r.state });
+  },
+  'POST /v1/share/accept': async (req, res) => {
+    const u = auth(req), b = await readJson(req, 2e3), r = roomFor(u, b.room);
+    if (lc(r.guest) !== lc(u.name) || r.state !== 'invited') throw new HttpErr(409, 'Invitation expirée');
+    r.state = 'live'; r.t = Date.now();
+    send(res, 200, { room: r.id, host: r.host, game: r.game, state: r.state });
+  },
+  'POST /v1/share/decline': async (req, res) => {
+    const u = auth(req), b = await readJson(req, 2e3), r = roomFor(u, b.room);
+    if (lc(r.guest) === lc(u.name) && r.state === 'invited') { r.state = 'declined'; r.t = Date.now(); }
+    send(res, 200, { state: r.state });
+  },
+  'POST /v1/share/end': async (req, res) => {
+    const u = auth(req), b = await readJson(req, 2e3), r = roomFor(u, b.room);
+    if (r.state !== 'ended' && r.state !== 'declined') { r.state = 'ended'; r.t = Date.now(); }
+    send(res, 200, { state: r.state });
+  },
+  // signalisation WebRTC : offre / reponse / candidats ICE, dans les deux sens
+  'POST /v1/share/signal': async (req, res) => {
+    const u = auth(req), b = await readJson(req, 40e3), r = roomFor(u, b.room);
+    if (r.state !== 'live' && r.state !== 'invited') throw new HttpErr(409, 'Partie terminée');
+    const kind = ['offer', 'answer', 'ice', 'bye'].includes(b.kind) ? b.kind : null;
+    if (!kind || typeof b.data !== 'string' || b.data.length > 30000) throw new HttpErr(400, 'Signal invalide');
+    if (r.msgs.length > 400) r.msgs.splice(0, r.msgs.length - 400);
+    r.msgs.push({ id: ++r.seq, to: lc(r.host) === lc(u.name) ? lc(r.guest) : lc(r.host), kind, data: b.data });
+    send(res, 201, { id: r.seq });
+  },
+  'GET /v1/share/signal': async (req, res, url) => {
+    const u = auth(req), r = roomFor(u, url.searchParams.get('room')), after = +url.searchParams.get('after') || 0;
+    send(res, 200, { state: r.state, msgs: r.msgs.filter(m => m.id > after && m.to === lc(u.name)).map(m => ({ id: m.id, kind: m.kind, data: m.data })) });
   },
 
   'GET /v1/notifications': async (req, res, url) => {
