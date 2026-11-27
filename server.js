@@ -33,7 +33,9 @@ function initDb() {
   unlocks: load('unlocks.json', {}),      // v5.35 : pseudo en minuscules -> [indices des thèmes débloqués]
   gunlocks: load('gunlocks.json', {}),    // v5.36 : pseudo en minuscules -> [noms des jeux débloqués (Compte Jeux)]
   coffre: load('coffre.json', null),      // v5.47 : coffre Steam CHIFFRE (la phrase secrète ne quitte jamais le navigateur de l'administrateur) { vault: {v,s,i,c}, ts, src, prev }
-  catalog: load('catalog.json', { games: [], ts: 0 }),   // v5.47 : liste des jeux (noms seulement) pour « envoyer un jeu » depuis /admin
+  catalog: load('catalog.json', { games: [], ts: 0 }),
+  downloads: load('downloads.json', null),   // v5.62 : liens de telechargement par plateforme (source de verite = ce serveur) { data: {schema, apps:[...]}, ts, src }
+  coffrepub: load('coffrepub.json', { on: false, auto: false, vault: null, ts: 0 }),   // v5.62 : copie CHIFFREE du coffre publiee sur /public/coffre.json (pour le site)   // v5.47 : liste des jeux (noms seulement) pour « envoyer un jeu » depuis /admin
   seq: Object.assign({ msg: 0, notif: 0, dm: 0, grp: 0, gmsg: 0, purchase: 0 }, load('seq.json', {}))
 });
 }
@@ -136,7 +138,7 @@ async function ghFinal() { try { flush(); ghBusy = false; await ghPush(); } catc
 const R_URL = (process.env.UPSTASH_REDIS_REST_URL || '').replace(/\/+$/, ''), R_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
 const REMOTE = !GH_ON && /^(https:\/\/|http:\/\/localhost[:/])/.test(R_URL + '/') && !!R_TOKEN;
 const RK = 'gondzet:f:', RCHUNK = 700000, rQueue = new Set();
-const JSON_NAMES = ['users', 'sessions', 'messages', 'notifs', 'friends', 'dms', 'groups', 'gmsgs', 'steam', 'vaults', 'trials', 'purchases', 'unlocks', 'gunlocks', 'coffre', 'catalog', 'seq'];
+const JSON_NAMES = ['users', 'sessions', 'messages', 'notifs', 'friends', 'dms', 'groups', 'gmsgs', 'steam', 'vaults', 'trials', 'purchases', 'unlocks', 'gunlocks', 'coffre', 'catalog', 'downloads', 'coffrepub', 'seq'];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function rcmd(args) {
   const r = await fetch(R_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + R_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(args), signal: AbortSignal.timeout(20000) });
@@ -293,9 +295,49 @@ async function vaultFromSite() {
 function setCoffre(vault, src) {   // garde UNE version precedente (bouton « Annuler la derniere sauvegarde »)
   db.coffre = { vault, ts: Date.now(), src, prev: db.coffre && db.coffre.vault ? { vault: db.coffre.vault, ts: db.coffre.ts } : null };
   save('coffre');
+  if (db.coffrepub.on && db.coffrepub.auto) publishCoffre();
 }
-const coffreOut = () => db.coffre && db.coffre.vault ? { vault: db.coffre.vault, ts: db.coffre.ts, src: db.coffre.src || '', hasPrev: !!db.coffre.prev } : { vault: null, ts: 0, src: '', hasPrev: false };
-let dlCache = { ts: 0, data: null };
+// v5.62 : publication du coffre CHIFFRE sur /public/coffre.json (le site l'affiche ; sans la phrase secrete il reste illisible)
+function publishCoffre() { db.coffrepub = { on: true, auto: !!db.coffrepub.auto, vault: db.coffre.vault, ts: Date.now() }; save('coffrepub'); }
+const pubOut = () => ({ on: !!db.coffrepub.on, auto: !!db.coffrepub.auto, ts: db.coffrepub.ts || 0, same: !!(db.coffrepub.on && db.coffre && db.coffre.vault && db.coffrepub.vault && db.coffrepub.vault.c === db.coffre.vault.c) });
+const coffreOut = () => Object.assign(db.coffre && db.coffre.vault ? { vault: db.coffre.vault, ts: db.coffre.ts, src: db.coffre.src || '', hasPrev: !!db.coffre.prev } : { vault: null, ts: 0, src: '', hasPrev: false }, { pub: pubOut() });
+// v5.62 : liens de telechargement (par application et par plateforme) geres ici, publies sur /public/versions.json (meme format que versions.json du site)
+const PF_RE = /^[a-z0-9_-]{2,20}$/;
+const clip = (v, n) => typeof v === 'string' ? v.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, n) : '';
+const httpsUrl = v => { if (typeof v !== 'string' || v.length > 2000) return null; try { return new URL(v.trim()).protocol === 'https:' ? v.trim() : null; } catch (e) { return null; } };
+function dlSanitize(j) {   // garde les champs inconnus du site, nettoie les champs connus
+  const apps = (Array.isArray(j && j.apps) ? j.apps : []).slice(0, 20).map(a => {
+    a = a && typeof a === 'object' ? a : {};
+    const platforms = {};
+    for (const k of Object.keys(a.platforms || {}).slice(0, 20)) {
+      if (!PF_RE.test(k)) continue;
+      const p = a.platforms[k] || {};
+      const versions = (Array.isArray(p.versions) ? p.versions : []).slice(0, 200).map(v => { v = v && typeof v === 'object' ? v : {}; return Object.assign({}, v, { version: clip(String(v.version == null ? '' : v.version), 30), date: clip(v.date, 30), notes: clip(v.notes, 300), url: httpsUrl(v.url), sha256: /^[0-9a-f]{64}$/i.test(v.sha256 || '') ? v.sha256.toLowerCase() : '' }); }).filter(v => v.version);
+      platforms[k] = Object.assign({}, p, { latest: clip(String(p.latest == null ? '' : p.latest), 30) || null, versions });
+    }
+    return Object.assign({}, a, { id: clip(a.id, 40) || 'app', name: clip(a.name, 80) || 'Application', platforms });
+  });
+  return Object.assign({}, j && typeof j === 'object' ? j : {}, { schema: 1, apps });
+}
+const dlEmpty = () => ({ schema: 1, apps: [{ id: 'g-ondzet-now', name: 'G-Ondzet Now', platforms: { android: { latest: null, versions: [] }, ios: { latest: null, versions: [] }, windows: { latest: null, versions: [] } } }] });
+async function dlFromSite() { return dlSanitize(JSON.parse(await siteGet('/versions.json?t=' + Date.now()))); }
+async function dlData() {   // au premier acces : reprend versions.json du site (comme le coffre), sinon une liste vide
+  if (!db.downloads || !db.downloads.data) {
+    let data = null, src = 'site';
+    try { data = await dlFromSite(); } catch (e) { /* site injoignable ou sans versions.json */ }
+    if (!data || !data.apps.length) { data = dlEmpty(); src = 'vide'; }
+    db.downloads = { data, ts: Date.now(), src }; save('downloads');
+  }
+  return db.downloads;
+}
+const dlTouch = (d, src) => { d.ts = Date.now(); d.src = src || 'admin'; save('downloads'); };
+function dlApp(data, id) {
+  if (!data.apps.length) data.apps.push(dlEmpty().apps[0]);
+  const a = id ? data.apps.find(x => x.id === id) : data.apps[0];
+  if (!a) throw new HttpErr(404, 'Application introuvable');
+  return a;
+}
+const dlOut = d => ({ ts: d.ts, src: d.src || '', apps: d.data.apps });
 const pub = u => ({ username: u.name, avatar: avatarUrl(u) });
 // v5.23 : amis / groupes
 const dn = k => (db.users[k] ? db.users[k].name : k);                                   // pseudo affiché
@@ -875,14 +917,64 @@ const routes = {
     }
     send(res, 200, { events: ev, now, pending: pending() });
   },
-  // v5.47 : infos de telechargement de l'application (lues dans versions.json du site, gardees 60 s)
+  // v5.47 / v5.62 : liens de telechargement de l'application. Source de verite = ce serveur (publie sur /public/versions.json) ; au premier acces ils sont repris de versions.json du site.
   'GET /v1/admin/downloads': async (req, res) => {
     admin(req);
-    if (!dlCache.data || Date.now() - dlCache.ts > 60e3) {
-      try { const j = JSON.parse(await siteGet('/versions.json?t=' + Date.now())); dlCache = { ts: Date.now(), data: j }; }
-      catch (e) { if (!dlCache.data) throw e instanceof HttpErr ? e : new HttpErr(502, 'versions.json illisible sur le site'); }
+    send(res, 200, Object.assign({ site: SITE_URL }, dlOut(await dlData())));
+  },
+  // ajoute une version OU remplace le lien d'une version existante, pour une plateforme (android, ios, windows, macos, linux...)
+  'POST /v1/admin/downloads/link': async (req, res) => {
+    admin(req);
+    const b = await readJson(req, 20e3), d = await dlData();
+    const pf = String(b.platform || '').toLowerCase().trim();
+    if (!PF_RE.test(pf)) throw new HttpErr(400, 'Plateforme invalide (2 à 20 lettres minuscules, chiffres, - ou _)');
+    const url = httpsUrl(b.url);
+    if (!url) throw new HttpErr(400, 'Lien invalide : une adresse https://… est obligatoire');
+    let sha = null;
+    if (b.sha256 !== undefined) { sha = String(b.sha256 || '').trim().toLowerCase(); if (sha && !/^[0-9a-f]{64}$/.test(sha)) throw new HttpErr(400, 'SHA-256 invalide (64 caractères hexadécimaux)'); }
+    const app = dlApp(d.data, b.app ? String(b.app) : '');
+    const p = app.platforms[pf] || (app.platforms[pf] = { latest: null, versions: [] });
+    const version = clip(String(b.version == null ? '' : b.version), 30) || p.latest;
+    if (!version) throw new HttpErr(400, 'Indique le numéro de version');
+    let v = p.versions.find(x => x.version === version);
+    const replaced = !!v;
+    if (!v) { v = { version, date: new Date().toISOString().slice(0, 10), notes: '', url: null, sha256: '' }; p.versions.push(v); }
+    v.url = url;
+    if (b.date !== undefined) v.date = clip(String(b.date || ''), 30);
+    if (b.notes !== undefined) v.notes = clip(String(b.notes || ''), 300);
+    if (sha !== null) v.sha256 = sha;
+    if (b.latest === true || (b.latest !== false && (!replaced || !p.latest))) p.latest = version;
+    dlTouch(d);
+    send(res, 200, Object.assign({ ok: true, replaced, platform: pf, version, latest: p.latest }, dlOut(d)));
+  },
+  // retire une version d'une plateforme (sans « version » : retire toute la plateforme)
+  'POST /v1/admin/downloads/delete': async (req, res) => {
+    admin(req);
+    const b = await readJson(req, 5e3), d = await dlData();
+    const pf = String(b.platform || '').toLowerCase().trim(), app = dlApp(d.data, b.app ? String(b.app) : ''), p = app.platforms[pf];
+    if (!p) throw new HttpErr(404, 'Plateforme introuvable');
+    if (b.version === undefined || b.version === null || b.version === '') delete app.platforms[pf];
+    else {
+      const i = p.versions.findIndex(x => x.version === String(b.version));
+      if (i < 0) throw new HttpErr(404, 'Version introuvable');
+      p.versions.splice(i, 1);
+      if (p.latest === String(b.version)) p.latest = p.versions.length ? p.versions[p.versions.length - 1].version : null;
     }
-    send(res, 200, { site: SITE_URL, ts: dlCache.ts, apps: Array.isArray(dlCache.data.apps) ? dlCache.data.apps : [] });
+    dlTouch(d);
+    send(res, 200, Object.assign({ ok: true }, dlOut(d)));
+  },
+  // remplace toute la liste du serveur par celle de versions.json du site
+  'POST /v1/admin/downloads/import': async (req, res) => {
+    admin(req);
+    const data = await dlFromSite();
+    db.downloads = { data, ts: Date.now(), src: 'site' }; save('downloads');
+    send(res, 200, Object.assign({ site: SITE_URL }, dlOut(db.downloads)));
+  },
+  // v5.62 : donnees publiques lues par le site (CORS ouvert, aucune information privee)
+  'GET /public/versions.json': async (req, res) => { send(res, 200, (await dlData()).data, PUB_HEADERS); },
+  'GET /public/coffre.json': async (req, res) => {
+    if (!db.coffrepub.on || !vaultOk(db.coffrepub.vault)) throw new HttpErr(404, 'Aucun coffre publié');
+    send(res, 200, vaultClean(db.coffrepub.vault), PUB_HEADERS);
   },
   // v5.47 : coffre Steam chiffre. Le serveur ne voit jamais la phrase secrete : le navigateur dechiffre / rechiffre.
   'GET /v1/admin/coffre': async (req, res) => {
@@ -907,6 +999,20 @@ const routes = {
     if (!db.coffre || !db.coffre.prev) throw new HttpErr(404, 'Aucune version précédente');
     const cur = { vault: db.coffre.vault, ts: db.coffre.ts };
     db.coffre = { vault: db.coffre.prev.vault, ts: Date.now(), src: 'undo', prev: cur }; save('coffre');
+    if (db.coffrepub.on && db.coffrepub.auto) publishCoffre();
+    send(res, 200, coffreOut());
+  },
+  // v5.62 : publier (ou retirer) la copie chiffree du coffre sur /public/coffre.json ; auto = republier a chaque modification
+  'POST /v1/admin/coffre/publish': async (req, res) => {
+    admin(req);
+    const b = await readJson(req, 2e3);
+    if (b.auto !== undefined) db.coffrepub.auto = b.auto === true;
+    if (b.on === false) db.coffrepub = { on: false, auto: db.coffrepub.auto, vault: null, ts: 0 };
+    else if (b.on === true || b.auto === true) {
+      if (!db.coffre || !db.coffre.vault) throw new HttpErr(404, 'Aucun coffre à publier');
+      publishCoffre();
+    }
+    save('coffrepub');
     send(res, 200, coffreOut());
   },
   'GET /v1/admin/catalog': async (req, res) => { admin(req); send(res, 200, db.catalog); },
@@ -999,6 +1105,7 @@ function adminDelete(req, res, p) {
 }
 
 // ---------------------------------------------------------------- serveur HTTP
+const PUB_HEADERS = { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=30' };   // v5.62 : /public/* lisible depuis le site (aucune donnee privee)
 const PAGES = { '/chat': 'chat.html', '/admin': 'admin.html' };
 const FRAME_OK = (process.env.CHAT_FRAME_ANCESTORS || '').split(/[\s,]+/)
   .map(o => { const m = /^(https:\/\/(\*\.)?[a-z0-9.-]+(:\d+)?)(\/.*)?$/i.exec(o); return m ? m[1] : ''; }).filter(Boolean).join(' ');   // origines https seulement (un « / » final est toléré)
@@ -1010,6 +1117,7 @@ function startServer() {
 const srv = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x'), p = url.pathname;
+    if (req.method === 'OPTIONS' && p.startsWith('/public/')) { res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET', 'Access-Control-Max-Age': '86400' }); return res.end(); }
     if (p === '/healthz') return send(res, 200, { ok: true, ready: isReady });   // v5.45 : pour la « Health Check Path » de Render et pour réveiller le service
     if (!isReady && !PAGES[p] && p !== '/') {
       // v5.45 : le serveur écoute dès le démarrage ; pendant la restauration (quelques dizaines de secondes sur Render gratuit) les demandes ATTENDENT au lieu de recevoir une erreur 502
@@ -1046,7 +1154,8 @@ const srv = http.createServer(async (req, res) => {
     await h(req, res, url);
   } catch (e) {
     if (res.headersSent) return res.end();
-    if (e instanceof HttpErr) send(res, e.code, { error: e.message });
+    const cors = req.url.startsWith('/public/') ? { 'Access-Control-Allow-Origin': '*' } : undefined;
+    if (e instanceof HttpErr) send(res, e.code, { error: e.message }, cors);
     else { console.error(e); send(res, 500, { error: 'Erreur serveur' }); }
   }
 });

@@ -92,3 +92,13 @@ Routes (toutes avec `Authorization: Bearer <jeton>`), **salles gardées en mémo
 
 ## v5.61 : photos de profil et appels vocaux
 `GET /v1/avatars?names=a,b` ; appels entre amis : `POST /v1/call/invite|accept|end|signal`, `GET /v1/call/poll|signal` (en mémoire). Test : `node test_call.js`.
+
+## v5.62 : le serveur publie le coffre Steam chiffré et les liens de téléchargement du site
+Le site Wix ne peut pas être modifié par le serveur : c'est donc **le serveur qui publie**, et le site **lit** ces adresses publiques (CORS ouvert, aucune donnée privée, courte mise en cache de 30 s).
+- **`GET /public/versions.json`** : liens de téléchargement de chaque plateforme, **même format** que `versions.json` du site (il suffit de changer l'adresse lue par la page de téléchargement). Au premier accès, la liste est reprise de `versions.json` du site.
+- **`GET /public/coffre.json`** : copie **chiffrée** du coffre Steam `{v,s,i,c}` (404 tant qu'il n'est pas publié). Sans la phrase secrète elle reste illisible : choisis-la longue.
+- **/admin › Téléchargements** : formulaire « Ajouter ou remplacer un lien » (Android, iOS, Windows, macOS, Linux ou autre plateforme), modifier / supprimer une version, « Recharger depuis le site ».
+- **/admin › Coffre Steam › Synchronisation** : « Publier sur le site », « Retirer la publication », et l'option « Republier automatiquement à chaque modification ».
+- Routes admin (en-tête `x-admin-key`) : `POST /v1/admin/downloads/link {platform, version?, url, date?, notes?, sha256?, latest?}` (version existante = lien remplacé ; sans `version` = lien de la dernière version ; lien `https://` obligatoire) · `POST /v1/admin/downloads/delete {platform, version?}` · `POST /v1/admin/downloads/import` · `POST /v1/admin/coffre/publish {on?, auto?}`. `GET /v1/admin/downloads` lit maintenant la liste du serveur.
+- Côté site : dans la page de téléchargement, lire `https://TON-SERVEUR/public/versions.json` au lieu de `versions.json` ; dans `comptes.html`, remplacer la variable `VAULT` par `fetch('https://TON-SERVEUR/public/coffre.json').then(r => r.json())`.
+- Tests : `node test_publish.js` (lance son propre serveur et un faux site).

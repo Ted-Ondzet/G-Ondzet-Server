@@ -208,7 +208,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;p
     <div id="v-lock">
      <div class="card" id="v-unlock">
       <div class="fld"><label for="vpass">Phrase secrète du coffre</label><input id="vpass" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-      <div class="actions" style="margin-top:0"><button class="btn" id="vunlock" type="button">Déverrouiller</button><button class="btn ghost" id="vdl2" type="button">⬇️ Télécharger le code chiffré (.txt)</button></div>
+      <div class="actions" style="margin-top:0"><button class="btn" id="vunlock" type="button">Déverrouiller</button></div>
       <div id="vmsg" class="sub" style="margin-top:10px;min-height:18px"></div>
      </div>
      <div class="card" id="v-none" hidden>
@@ -232,16 +232,36 @@ table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;p
       <div class="actions" style="margin-top:0"><button class="btn ghost" id="radd" type="button">Ajouter ces lignes</button><button class="btn danger" id="rrep" type="button">Remplacer toute la liste</button></div>
       <div class="sub" id="rerr" style="margin-top:8px"></div></div></details>
      <details class="card fold"><summary>🔁 Synchronisation et sauvegardes</summary><div class="in">
-      <div class="note">Chaque modification est enregistrée (chiffrée) sur le serveur. Pour que la page publique <b>comptes.html</b> du site soit aussi à jour, copie le code chiffré ci-dessous et colle-le dans le site.</div>
+      <div class="note">Chaque modification est enregistrée (chiffrée) sur le serveur. Pour que le site affiche aussi le coffre, <b>publie-le</b> : le serveur le met à disposition (toujours chiffré) à l’adresse ci-dessous, et la page <b>comptes.html</b> du site la lit.</div>
+      <div class="card" style="margin-top:12px"><div class="ch"><h3>🌐 Publication sur le site</h3><span class="tag" id="vpubst">Non publié</span></div>
+       <div class="fld"><label for="vpurl">Adresse publique du coffre chiffré</label><input id="vpurl" readonly></div>
+       <div class="actions" style="margin-top:0"><button class="btn" id="vpub" type="button">Publier sur le site</button><button class="btn ghost" id="vpcopy" type="button">Copier l’adresse</button><button class="btn danger" id="vunpub" type="button">Retirer la publication</button></div>
+       <label class="chk" style="margin-top:10px"><input type="checkbox" id="vpauto"> Republier automatiquement à chaque modification du coffre</label>
+       <div class="sub" style="margin-top:8px">Le contenu publié reste illisible sans ta phrase secrète : choisis-la longue.</div></div>
       <div class="fld" style="margin-top:12px"><textarea id="vblob" readonly></textarea></div>
-      <div class="actions" style="margin-top:0"><button class="btn ghost" id="vcopy" type="button">Copier le code chiffré</button><button class="btn ghost" id="vdl" type="button">⬇️ Télécharger le code chiffré (.txt)</button><button class="btn ghost" id="vundo" type="button">Annuler la dernière sauvegarde</button><button class="btn danger" id="vresite" type="button">Recharger depuis le site</button></div></div></details>
+      <div class="actions" style="margin-top:0"><button class="btn ghost" id="vcopy" type="button">Copier le code chiffré</button><button class="btn ghost" id="vundo" type="button">Annuler la dernière sauvegarde</button><button class="btn danger" id="vresite" type="button">Recharger depuis le site</button></div></div></details>
      <div id="vlist"></div>
     </div>
    </section>
 
    <section id="s-dl" hidden>
-    <h2 class="ptitle">Téléchargements</h2><p class="psub">Versions publiées de l’application, lues sur ton site (versions.json).</p>
+    <h2 class="ptitle">Téléchargements</h2><p class="psub">Les liens de téléchargement de chaque plateforme sont gérés ici et publiés par le serveur : ajoute une version ou remplace un lien, le site le lit aussitôt.</p>
     <div class="toolbar"><a class="btn ghost sm" id="dlsite" target="_blank" rel="noopener" style="text-decoration:none">Ouvrir la page de téléchargement du site ↗</a><button class="btn ghost sm" id="dlref" type="button">Actualiser</button><span class="sub" id="dlts"></span></div>
+    <div class="card" id="dlform"><div class="ch"><h3>➕ Ajouter ou remplacer un lien</h3></div>
+     <div class="fgrid">
+      <div class="fld"><label for="dfpf">Plateforme</label><select id="dfpf"><option value="android">🤖 Android</option><option value="ios">🍎 iOS</option><option value="windows">🪟 Windows</option><option value="macos">💻 macOS</option><option value="linux">🐧 Linux</option><option value="_autre">📦 Autre…</option></select></div>
+      <div class="fld" id="dfpfw" hidden><label for="dfpf2">Nom de la plateforme</label><input id="dfpf2" placeholder="ex. androidtv" autocapitalize="off" autocomplete="off"></div>
+      <div class="fld"><label for="dfver">Version</label><input id="dfver" placeholder="ex. 5.61" autocomplete="off"></div>
+      <div class="fld"><label for="dfurl">Lien de téléchargement (https)</label><input id="dfurl" type="url" placeholder="https://…" autocapitalize="off" autocomplete="off"></div>
+     </div>
+     <details class="fold"><summary class="sub" style="cursor:pointer">Options (date, notes, SHA-256)</summary><div class="in"><div class="fgrid">
+      <div class="fld"><label for="dfdate">Date</label><input id="dfdate" type="date"></div>
+      <div class="fld"><label for="dfnotes">Notes</label><input id="dfnotes" maxlength="300" placeholder="Nouveautés…"></div>
+      <div class="fld"><label for="dfsha">SHA-256</label><input id="dfsha" placeholder="64 caractères hexadécimaux" autocomplete="off"></div></div></div></details>
+     <label class="chk" style="margin-top:10px"><input type="checkbox" id="dflatest" checked> Définir comme dernière version de cette plateforme</label>
+     <div class="actions"><button class="btn" id="dfsave" type="button">Enregistrer le lien</button><button class="btn ghost" id="dfclear" type="button">Vider</button></div>
+     <div class="sub">Si la version existe déjà, son lien est remplacé ; sinon elle est ajoutée. Laisse la version vide pour remplacer le lien de la dernière version.</div></div>
+    <div class="note" style="margin:12px 0">Adresse publique lue par le site : <span class="mono" id="dlpub"></span> <button class="btn ghost sm" id="dlpubcp" type="button">Copier</button> <button class="btn danger sm" id="dlresite" type="button">Recharger depuis le site</button></div>
     <div id="dlbox"><div class="empty">Chargement…</div></div>
    </section>
 
@@ -431,22 +451,40 @@ async function loadDownloads(quiet){
     $('ddl').textContent='';$('ddl').append(h('div',{class:'empty'},'Indisponible'))}}
 function renderDl(){
   const box=$('dlbox'),d=S.dl;box.textContent='';if(!d)return;
-  $('dlsite').href=d.site+'/#telecharger';$('dlts').textContent='Données du site · '+ago(d.ts);
+  $('dlsite').href=d.site+'/#telecharger';$('dlts').textContent='Publié par le serveur · '+ago(d.ts);$('dlpub').textContent=location.origin+'/public/versions.json';
   if(!d.apps.length){box.append(h('div',{class:'empty'},'Aucune application dans versions.json'));return}
   d.apps.forEach(app=>{
     const pl=app.platforms||{},keys=['android','ios','windows'].concat(Object.keys(pl).filter(k=>!PF[k])),grid=h('div',{class:'dls'});
     keys.filter(k=>pl[k]||PF[k]).forEach(k=>{
       const p=pl[k]||{latest:null,versions:[]},vs=(p.versions||[]).slice(),cur=vs.find(v=>v.version===p.latest)||vs[vs.length-1]||null,url=cur&&safeUrl(cur.url),ok=!!url,pf=PF[k]||['📦',k];
-      const hist=vs.length>1?h('details',null,h('summary',{class:'sub',style:'cursor:pointer'},vs.length+' versions publiées'),
-        h('table',null,h('tr',null,h('th',null,'Version'),h('th',null,'Date'),h('th',null,'Lien')),
-          vs.slice().reverse().map(v=>h('tr',null,h('td',null,v.version),h('td',null,v.date?fmtD(v.date):'—'),h('td',null,safeUrl(v.url)?h('a',{href:v.url,target:'_blank',rel:'noopener',style:'color:var(--acc2)'},'Télécharger'):'—'))))):null;
+      const hist=vs.length>0?h('details',null,h('summary',{class:'sub',style:'cursor:pointer'},vs.length+' versions publiées'),
+        h('table',null,h('tr',null,h('th',null,'Version'),h('th',null,'Date'),h('th',null,'Lien'),h('th',null,'')),
+          vs.slice().reverse().map(v=>h('tr',null,h('td',null,v.version),h('td',null,v.date?fmtD(v.date):'—'),h('td',null,safeUrl(v.url)?h('a',{href:v.url,target:'_blank',rel:'noopener',style:'color:var(--acc2)'},'Télécharger'):'—'),h('td',null,h('button',{class:'btn ghost sm',type:'button',onclick:()=>dlFill(k,v)},'✏️'),' ',h('button',{class:'btn danger sm',type:'button',onclick:()=>dlDel(k,v.version)},'🗑')))))):null;
       grid.append(h('div',{class:'dl'+(ok?' ok':'')},
         h('div',{class:'pf'},h('span',{class:'ico'},pf[0]),pf[1],h('span',{class:'grow'}),h('span',{class:'tag '+(ok?'ok':p.latest?'warn':'')},ok?'Disponible':p.latest?'Lien à venir':'Bientôt')),
         h('div',{class:'big'},p.latest?'v'+p.latest:'—'),
         h('div',{class:'sub'},cur?(cur.date?'Publiée le '+fmtD(cur.date):'Date non renseignée')+(cur.notes?' · '+cur.notes:''):'Aucune version publiée'),
-        ok?h('div',{class:'actions',style:'margin:0'},h('a',{class:'btn sm',href:url,target:'_blank',rel:'noopener',style:'text-decoration:none'},'Télécharger ↗'),h('button',{class:'btn ghost sm',type:'button',onclick:()=>copy(url)},'Copier le lien')):null,
+        h('div',{class:'actions',style:'margin:0'},ok?h('a',{class:'btn sm',href:url,target:'_blank',rel:'noopener',style:'text-decoration:none'},'Télécharger ↗'):null,ok?h('button',{class:'btn ghost sm',type:'button',onclick:()=>copy(url)},'Copier le lien'):null,h('button',{class:'btn ghost sm',type:'button',onclick:()=>dlFill(k,cur||{version:p.latest||''})},ok?'✏️ Remplacer le lien':'✏️ Ajouter le lien')),
         cur&&cur.sha256?h('div',null,h('div',{class:'sub'},'SHA-256'),h('div',{class:'mono'},cur.sha256)):null,hist))});
     box.append(h('div',{class:'ch'},h('h3',null,app.name||app.id)),grid)})}
+function dlPf(){return $('dfpf').value==='_autre'?$('dfpf2').value.trim().toLowerCase():$('dfpf').value}
+function dlFill(pf,v){const known=[...$('dfpf').options].some(o=>o.value===pf);$('dfpf').value=known?pf:'_autre';$('dfpfw').hidden=known;$('dfpf2').value=known?'':pf;
+  $('dfver').value=v&&v.version||'';$('dfurl').value=v&&v.url||'';$('dfdate').value=/^\d{4}-\d{2}-\d{2}$/.test(v&&v.date||'')?v.date:'';$('dfnotes').value=v&&v.notes||'';$('dfsha').value=v&&v.sha256||'';
+  $('dflatest').checked=!v||!v.version;$('dfurl').focus();$('dlform').scrollIntoView({behavior:'smooth',block:'center'})}
+function dlClear(){$('dfver').value=$('dfurl').value=$('dfdate').value=$('dfnotes').value=$('dfsha').value='';$('dflatest').checked=true}
+$('dfpf').onchange=()=>{$('dfpfw').hidden=$('dfpf').value!=='_autre'};
+$('dfclear').onclick=dlClear;
+$('dfsave').onclick=async()=>{const b=$('dfsave');b.disabled=true;
+  try{const body={platform:dlPf(),version:$('dfver').value.trim(),url:$('dfurl').value.trim(),latest:$('dflatest').checked?true:false};
+    if($('dfdate').value)body.date=$('dfdate').value;if($('dfnotes').value.trim())body.notes=$('dfnotes').value.trim();if($('dfsha').value.trim())body.sha256=$('dfsha').value.trim();
+    const j=await api('POST','/v1/admin/downloads/link',body);S.dl=Object.assign({site:S.dl&&S.dl.site||''},j);renderDl();renderDdl();dlClear();
+    toast((j.replaced?'Lien remplacé':'Version ajoutée')+' ('+j.platform+' '+j.version+') · publié sur le site ✓',true)}
+  catch(e){toast(e.message,false)}b.disabled=false};
+async function dlDel(pf,ver){if(!confirm('Retirer la version '+ver+' ('+pf+') ?'))return;
+  try{const j=await api('POST','/v1/admin/downloads/delete',{platform:pf,version:ver});S.dl=Object.assign({site:S.dl&&S.dl.site||''},j);renderDl();renderDdl();toast('Version retirée ✓',true)}catch(e){toast(e.message,false)}}
+$('dlpubcp').onclick=()=>copy($('dlpub').textContent,$('dlpubcp'));
+$('dlresite').onclick=async()=>{if(!confirm('Remplacer TOUS les liens du serveur par ceux de versions.json du site ?'))return;
+  try{S.dl=await api('POST','/v1/admin/downloads/import');renderDl();renderDdl();toast('Liens rechargés depuis le site ✓',true)}catch(e){toast(e.message,false)}};
 $('dlref').onclick=async()=>{$('dlref').disabled=true;await loadDownloads();$('dlref').disabled=false};
 
 /* ====== coffre Steam (dechiffre dans le navigateur) ====== */
@@ -475,7 +513,9 @@ const vmsg=(t,bad)=>{const m=$('vmsg');m.textContent=t||'';m.style.color=bad?'va
 const setSave=(t,bad)=>{const e=$('vsave');e.textContent=t;e.className='tag '+(bad?'bad':/^✓/.test(t)?'ok':'')};
 async function vaultEnter(){if(!V.loaded)await loadVault()}
 async function loadVault(){try{applyBlob(await api('GET','/v1/admin/coffre'));V.loaded=true}catch(e){vmsg(e.message,true)}}
-function applyBlob(j){V.blob=j.vault;$('v-unlock').hidden=!j.vault;$('v-none').hidden=!!j.vault;$('vblob').value=j.vault?JSON.stringify(j.vault):'';$('vundo').disabled=!j.hasPrev;
+function renderPub(p){p=p||{};const st=$('vpubst'),same=p.on&&p.same;st.textContent=!p.on?'Non publié':same?'✓ Publié · à jour':'Publié · ancienne version';st.className='tag '+(same?'ok':p.on?'warn':'');
+  $('vpurl').value=location.origin+'/public/coffre.json';$('vpauto').checked=!!p.auto;$('vunpub').disabled=!p.on;$('vpub').textContent=p.on&&!same?'Publier la dernière version':p.on?'Republier':'Publier sur le site'}
+function applyBlob(j){renderPub(j.pub);V.blob=j.vault;$('v-unlock').hidden=!j.vault;$('v-none').hidden=!!j.vault;$('vblob').value=j.vault?JSON.stringify(j.vault):'';$('vundo').disabled=!j.hasPrev;
   vmsg(j.vault?'Version du serveur : '+fmt(j.ts)+(j.src==='site'?' (importée depuis le site)':''):'')}
 async function vUnlock(){
   const pass=$('vpass').value;if(!pass){vmsg('Entre ta phrase secrète.',true);return}
@@ -536,11 +576,11 @@ $('rrep').onclick=()=>{const p=parseLines($('rraw').value),e=$('rerr');if(!p.len
   const pins={};V.ALL.forEach(x=>{if(x.pin&&x.u&&!pins[x.u])pins[x.u]=x.pin});
   V.ALL=p.map(r=>{const o={g:r[0],u:r[1],p:r[2]};if(pins[r[1]])o.pin=pins[r[1]];return o});$('rraw').value='';vBuild();renderVault();persist();e.textContent=p.length+' comptes importés. Les codes PIN déjà connus ont été conservés.'};
 $('vcopy').onclick=()=>copy($('vblob').value,$('vcopy'));
-function dlBlob(){   // le code est déjà chiffré : le téléchargement ne révèle aucun mot de passe
-  const t=V.blob?JSON.stringify(V.blob):'';if(!t){toast('Aucun coffre à télécharger',false);return}
-  const d=new Date(),z=n=>String(n).padStart(2,'0'),name='coffre-steam-'+d.getFullYear()+z(d.getMonth()+1)+z(d.getDate())+'-'+z(d.getHours())+z(d.getMinutes())+'.txt';
-  const u=URL.createObjectURL(new Blob([t],{type:'text/plain;charset=utf-8'})),a=document.createElement('a');a.href=u;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1000);toast('Code chiffré téléchargé ✓',true)}
-$('vdl').onclick=dlBlob;$('vdl2').onclick=dlBlob;
+$('vpcopy').onclick=()=>copy($('vpurl').value,$('vpcopy'));
+async function pubCall(b,msg){try{applyBlob(await api('POST','/v1/admin/coffre/publish',b));toast(msg,true)}catch(e){toast(e.message,false);try{applyBlob(await api('GET','/v1/admin/coffre'))}catch(x){}}}
+$('vpub').onclick=()=>pubCall({on:true},'Coffre publié sur le site ✓');
+$('vunpub').onclick=()=>{if(confirm('Retirer le coffre publié ? Le site ne pourra plus l’afficher.'))pubCall({on:false},'Publication retirée')};
+$('vpauto').onchange=()=>pubCall({auto:$('vpauto').checked},$('vpauto').checked?'Publication automatique activée ✓':'Publication automatique désactivée');
 async function reloadVault(){
   try{applyBlob(await api('GET','/v1/admin/coffre'));
     if(V.ALL&&V.pass){const d=V.blob?await decryptWith(V.blob,V.pass):null,l=d&&toList(d);if(l){V.ALL=l;V.lastSig='';vBuild();renderVault();syncCatalog()}else{vLock();vmsg('Le coffre a changé : déverrouille-le de nouveau.',true)}}}
