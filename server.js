@@ -31,6 +31,7 @@ function initDb() {
   trials: load('trials.json', {}),        // v5.31 : essais de thèmes -> empreinte appareil -> { thème: début (ms serveur) }
   purchases: load('purchases.json', []),  // v5.35 : achats (PIN / thème) { id, user, kind, item, theme, tx, status, ts, done } ; status = pending | accepted | refused
   unlocks: load('unlocks.json', {}),      // v5.35 : pseudo en minuscules -> [indices des thèmes débloqués]
+  ugames: load('ugames.json', {}),        // v5.79 : pseudo en minuscules -> [noms des jeux que le joueur possede] (envoyes par l'appli ; affiches sur son profil, aux amis)
   gunlocks: load('gunlocks.json', {}),    // v5.36 : pseudo en minuscules -> [noms des jeux débloqués (Compte Jeux)]
   coffre: load('coffre.json', null),      // v5.47 : coffre Steam CHIFFRE (la phrase secrète ne quitte jamais le navigateur de l'administrateur) { vault: {v,s,i,c}, ts, src, prev }
   catalog: load('catalog.json', { games: [], ts: 0 }),
@@ -138,7 +139,7 @@ async function ghFinal() { try { flush(); ghBusy = false; await ghPush(); } catc
 const R_URL = (process.env.UPSTASH_REDIS_REST_URL || '').replace(/\/+$/, ''), R_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
 const REMOTE = !GH_ON && /^(https:\/\/|http:\/\/localhost[:/])/.test(R_URL + '/') && !!R_TOKEN;
 const RK = 'gondzet:f:', RCHUNK = 700000, rQueue = new Set();
-const JSON_NAMES = ['users', 'sessions', 'messages', 'notifs', 'friends', 'dms', 'groups', 'gmsgs', 'steam', 'vaults', 'trials', 'purchases', 'unlocks', 'gunlocks', 'coffre', 'catalog', 'downloads', 'coffrepub', 'seq'];
+const JSON_NAMES = ['users', 'sessions', 'messages', 'notifs', 'friends', 'dms', 'groups', 'gmsgs', 'steam', 'vaults', 'trials', 'purchases', 'unlocks', 'gunlocks', 'ugames', 'coffre', 'catalog', 'downloads', 'coffrepub', 'seq'];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function rcmd(args) {
   const r = await fetch(R_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + R_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(args), signal: AbortSignal.timeout(20000) });
@@ -602,6 +603,61 @@ const routes = {
   'GET /v1/friends': async (req, res) => {
     const u = auth(req), me = fr(u);
     send(res, 200, { friends: me.f.map(dn), incoming: me.in.map(dn), outgoing: me.out.map(dn) });
+  },
+  // v5.78 : boite de reception legere pour les bannieres de l'appli : nouveaux messages prives / de groupe + demandes d'amis recues.
+  // dm / gm = dernier id deja vu par l'appli ; absent ou negatif = premiere fois : on ne renvoie que les derniers id (aucun ancien message).
+  'GET /v1/inbox': async (req, res, url) => {
+    const u = auth(req), mk = lc(u.name), me = fr(u);
+    const last = n => { const v = url.searchParams.get(n); return v !== null && v !== '' && +v >= 0 ? +v : -1 };
+    const adm = last('dm'), agm = last('gm');
+    const brief = m => ({ text: String(m.text || '').slice(0, 120), image: !!m.image, audio: !!m.audio });
+    const dm = adm < 0 ? [] : db.dms.filter(m => m.id > adm && m.to === mk && m.from !== mk).slice(0, 20)
+      .map(m => Object.assign({ id: m.id, user: dn(m.from) }, brief(m)));
+    const gm = agm < 0 ? [] : db.gmsgs.filter(m => m.id > agm && lc(m.user) !== mk && db.groups[m.g] && db.groups[m.g].members.includes(mk)).slice(0, 20)
+      .map(m => Object.assign({ id: m.id, user: m.user, group: db.groups[m.g].name }, brief(m)));
+    send(res, 200, { dm, gm, dmMax: db.seq.dm || 0, gmMax: db.seq.gmsg || 0, incoming: me.in.map(dn) });
+  },
+  // v5.79 : profil d'un joueur. Toi et tes amis : infos completes (prenom, nom, anciennete, nombre d'amis, jeux possedes) ; les autres : pseudo, photo, anciennete seulement.
+  'GET /v1/profile': async (req, res, url) => {
+    const u = auth(req), mk = lc(u.name), k = lc(url.searchParams.get('name'));
+    if (limited('prf|' + mk, 120, 60e3)) throw new HttpErr(429, 'Doucement');
+    const t = Object.prototype.hasOwnProperty.call(db.users, k) ? db.users[k] : null;
+    if (!t || (t.banned && k !== mk)) throw new HttpErr(404, 'Joueur introuvable');
+    const me = fr(u), rel = k === mk ? 'me' : me.f.includes(k) ? 'friend' : me.in.includes(k) ? 'incoming' : me.out.includes(k) ? 'outgoing' : 'none';
+    const out = { name: t.name, avatar: avatarUrl(t), created: t.created || 0, rel };
+    if (rel === 'me' || rel === 'friend') {
+      const seen = new Set(), games = [];
+      for (const g of [].concat(db.ugames[k] || [], db.gunlocks[k] || [])) {
+        const n = String(g || '').replace(/#\d+$/, '').trim(), key = n.toLowerCase();
+        if (n && !seen.has(key)) { seen.add(key); games.push(n); }
+      }
+      games.sort((a, b) => a.localeCompare(b, 'fr', { sensitivity: 'base' }));
+      Object.assign(out, { first: t.first || '', last: t.last || '', friends: frk(k).f.length, games });
+    }
+    send(res, 200, out);
+  },
+  // v5.79 : prenom / nom affiches sur le profil (modifiables dans Mon compte)
+  'POST /v1/me/profile': async (req, res) => {
+    const u = auth(req);
+    if (limited('mp|' + lc(u.name), 30, 3600e3)) throw new HttpErr(429, 'Trop de changements, reessaie plus tard');
+    const b = await readJson(req, 2e3), clean = v => String(v || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 30);
+    u.first = clean(b.first); u.last = clean(b.last);
+    save('users');
+    send(res, 200, { first: u.first, last: u.last });
+  },
+  // v5.79 : l'appli envoie la liste (noms) des jeux que le joueur possede (jeux obtenus + Mes comptes) ; ses amis la voient sur son profil
+  'POST /v1/me/games': async (req, res) => {
+    const u = auth(req), k = lc(u.name);
+    if (limited('mg|' + k, 60, 3600e3)) throw new HttpErr(429, 'Trop de mises a jour, reessaie plus tard');
+    const b = await readJson(req, 60e3);
+    if (!Array.isArray(b.games)) throw new HttpErr(400, 'Liste de jeux invalide');
+    const seen = new Set(), out = [];
+    for (const g of b.games.slice(0, 400)) {
+      const n = String(g || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 80), key = n.toLowerCase();
+      if (n && !seen.has(key)) { seen.add(key); out.push(n); }
+    }
+    db.ugames[k] = out; save('ugames');
+    send(res, 200, { count: out.length });
   },
   // demande d'ami (si l'autre t'avait déjà demandé : vous devenez amis directement)
   'POST /v1/friends/request': async (req, res) => {
